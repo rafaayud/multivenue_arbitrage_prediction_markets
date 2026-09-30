@@ -1,8 +1,13 @@
 # Multi-venue Arbitrage for Political Events
 
-An event-driven trading system for detecting and executing two-leg arbitrage
-across **Polymarket, Predict.fun and Limitless**, with a React dashboard for
-monitoring opportunities, execution, recovery and PnL.
+[![CI](https://github.com/rafaayud/multivenue_arbitrage_prediction_markets/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rafaayud/multivenue_arbitrage_prediction_markets/actions/workflows/ci.yml)
+
+An event-driven prediction-market arbitrage engine built with **hexagonal
+architecture, FastAPI and React**.
+
+Detect and execute two-leg opportunities across **Polymarket, Predict.fun and
+Limitless**, with an operations dashboard for signals, execution, recovery and
+PnL.
 
 This repository focuses on **political and policy events**, including central-bank
 interest-rate decisions. It combines a Python backend, domain models and
@@ -44,6 +49,51 @@ The shared engine also implements covered SELL arbitrage, with inventory
 preparation for selected markets. Selling requires existing outcome tokens; it
 is not uncollateralized short selling. The live-testing scope described below
 applies to BUY trades, not to every strategy the code supports.
+
+## A completed arbitrage
+
+The successful entry path buys complementary outcomes on two venues. The
+dispatcher prepares both orders before submission, records the prepared batch
+and applies the final guards. The two legs are then submitted in parallel;
+acknowledgements and fill updates can arrive independently.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Market as Market streams
+    participant Engine as Pipeline and engine
+    participant Dispatch as Order dispatcher
+    participant A as Venue A
+    participant B as Venue B
+    participant Journal as Execution journal
+    participant DB as PostgreSQL
+
+    Market->>Engine: Normalized YES and NO order books
+    Engine->>Engine: Check depth, fees, edge and risk limits
+    Engine->>Dispatch: Prepare matched two-leg BUY execution
+    Dispatch->>Dispatch: Prepare and sign both orders
+    Dispatch->>Journal: Append prepared execution batch
+    Dispatch->>Dispatch: Recheck freshness and submission deadline
+
+    par YES leg
+        Dispatch->>A: Submit BUY YES
+        A-->>Dispatch: Acknowledgement and fill updates
+        Dispatch->>Engine: Reconciled YES fills and order status
+    and NO leg
+        Dispatch->>B: Submit BUY NO
+        B-->>Dispatch: Acknowledgement and fill updates
+        Dispatch->>Engine: Reconciled NO fills and order status
+    end
+
+    Engine->>Engine: Both legs terminal, equal positive fills, zero residual
+    Engine->>Journal: Record accounting and completed execution
+    Journal-->>DB: Project journal events asynchronously
+    Note over Engine,DB: Entry completed does not mean event settled.<br/>Positions and committed capital remain until exit or settlement.
+```
+
+PostgreSQL projection runs in the background; it is not a synchronous database
+commit between the two submissions. If the fills do not match, this is no longer
+the completed-entry path: the execution can require recovery or manual review.
 
 ## Functionality
 
@@ -222,6 +272,9 @@ pull requests and manual dispatch. It has two independent jobs:
 CI has read-only repository permissions. It does not use trading credentials,
 submit orders, publish Docker images or deploy services. A green run checks the
 covered software behavior, not live fills, profitability or settlement safety.
+
+The badge at the top links to the workflow runs and displays GitHub's reported
+status for `main`; it is not a static passing label.
 
 Run the corresponding checks locally:
 
