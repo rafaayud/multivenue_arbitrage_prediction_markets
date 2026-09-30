@@ -17,6 +17,28 @@ ports-and-adapters boundaries with venue-specific market data and execution.
 > guarantee of profit or a production-readiness claim. The application can submit
 > real orders and on-chain transactions.
 
+## Supported venues and API credentials
+
+**Live trading through this dashboard is currently limited to three venues:
+Polymarket, Predict.fun and Limitless.** AGG provides market discovery and
+cross-venue matches; it is not a live execution venue in this workflow. Other
+venues may appear in AGG's catalog, but the dashboard only connects markets from
+the three supported execution venues.
+
+You must supply your own API access and signing credentials in `.env`:
+
+| Service | Configuration |
+| --- | --- |
+| **AGG** | `AGG_APP_ID` for the dashboard catalog. Authenticated AGG adapters additionally require `AGG_APP_API_KEY` or `AGG_ADMIN_KEY`. |
+| **Predict.fun** | `PREDICT_API_KEY`, `PREDICT_ACCOUNT_ADDRESS` and `PREDICT_PRIVY_PRIVATE_KEY`. |
+| **Polymarket** | `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_PASSPHRASE`, `POLYMARKET_PK` and `POLYMARKET_FUNDER`; configure `POLYMARKET_SIGNATURE_TYPE` for your wallet. |
+| **Limitless** | `LIMITLESS_API_KEY` and `LIMITLESS_PRIVATE_KEY`. |
+
+The current live-trading preflight requires credentials for **all three execution
+venues**, even when the selected event uses only two. See [`.env.example`](.env.example)
+for additional settings, including RPC and relayer configuration for inventory
+operations. No API keys or funded accounts are bundled with the project.
+
 ## Why political and policy events?
 
 In our live use, these events have been easier to execute on both legs than the
@@ -234,7 +256,8 @@ Requirements: Docker with Compose v2. For development outside Docker, use Python
    if (-not (Test-Path .env)) { Copy-Item .env.example .env }
    ```
 
-2. Supply your own venue configuration and a nonempty `TRADING_API_KEY`. Keep
+2. Configure the [API credentials](#supported-venues-and-api-credentials) above
+   and a nonempty `TRADING_API_KEY`. Keep
    signing keys and API secrets out of `VITE_*` variables, which are public
    frontend configuration. Compose supplies the local database connection.
 3. Build and start the services:
