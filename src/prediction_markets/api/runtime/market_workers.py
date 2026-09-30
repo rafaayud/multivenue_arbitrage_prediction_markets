@@ -15,8 +15,6 @@ Notes
 - Intent admission and the parent submission guard bound stale execution.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import logging

@@ -7,8 +7,6 @@ Responsibilities
 - Coordinate durable shutdown ordering for journal-owned resources.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

@@ -8,8 +8,6 @@ Responsibilities
 - Build the operational API representation of runtime and trading state.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

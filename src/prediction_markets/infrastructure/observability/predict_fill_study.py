@@ -10,8 +10,6 @@ Notes
 - Diagnostics never replace the financial journal or authorize recovery.
 """
 
-from __future__ import annotations
-
 import json
 import hashlib
 import logging
@@ -47,7 +45,7 @@ OWNED_FILES = ("manifest.json", "events.jsonl", "summary.json")
 STORAGE_LOCK_FILE = ".retention.lock"
 METADATA_LIMIT = 64 * 1024
 _log = logging.getLogger(__name__)
-_recorder: FillStudyRecorder | None = None
+_recorder: "FillStudyRecorder | None" = None
 _startup_status = "disabled"
 
 

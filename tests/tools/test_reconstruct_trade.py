@@ -4,7 +4,9 @@ from decimal import Decimal
 
 import pytest
 
-from repo_tools.reconstruct_trade import _checks, _remaining_exposure
+reconstruction = pytest.importorskip("repo_tools.reconstruct_trade")
+_checks = reconstruction._checks
+_remaining_exposure = reconstruction._remaining_exposure
 
 
 def _evidence(side, fills, corrections, residual="0", status="recovered"):

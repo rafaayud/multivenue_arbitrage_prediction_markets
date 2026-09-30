@@ -14,7 +14,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
 COPY migrations ./migrations
-COPY repo_tools/predict_fill_analysis.py ./repo_tools/predict_fill_analysis.py
 
 RUN uv sync --frozen --no-dev \
     && useradd --create-home app \

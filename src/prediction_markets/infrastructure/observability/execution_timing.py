@@ -6,8 +6,6 @@ Notes
   a context variable. They do not emit metrics, perform I/O, or retain payloads.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from collections.abc import Callable, Iterator

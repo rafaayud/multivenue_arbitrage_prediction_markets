@@ -8,8 +8,6 @@ Responsibilities
 - Apply policy-driven severity escalation to active incidents.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractContextManager

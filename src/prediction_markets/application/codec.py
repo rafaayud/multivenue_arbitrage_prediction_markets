@@ -10,8 +10,6 @@ Notes
 - The codec is intentionally explicit: journal data never controls Python imports.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 from dataclasses import fields, is_dataclass

@@ -1,131 +1,229 @@
-# Multi-venue Prediction Market Arbitrage
+# Multi-venue Arbitrage for Political Events
 
-An event-driven Python trading engine with a React operations dashboard. This
-snapshot focuses on cross-venue arbitrage in selected policy and political
-events, including interest-rate decisions, across **Polymarket, Predict.fun and
-Limitless**.
+An event-driven trading system for detecting and executing two-leg arbitrage
+across **Polymarket, Predict.fun and Limitless**, with a React dashboard for
+monitoring opportunities, execution, recovery and PnL.
 
-The project separates market semantics, trading decisions and venue integration
-through domain models, ports and adapters. It includes order-book ingestion,
-fee-aware detection, execution, recovery, persistence and operational metrics.
+This repository focuses on **political and policy events**, including central-bank
+interest-rate decisions. It combines a Python backend, domain models and
+ports-and-adapters boundaries with venue-specific market data and execution.
 
-This is an engineering portfolio snapshot, not a hosted service or a guarantee of
-profitable execution. It contains real order-submission code. Keep trading
-disabled until credentials, contract equivalence and risk limits have been
-reviewed.
+> This is a small-scale trading project and an engineering portfolio, not a
+> guarantee of profit or a production-readiness claim. The application can submit
+> real orders and on-chain transactions.
 
-## Strategy and scope
+## Why political and policy events?
 
-For equivalent binary markets, buying YES on one venue and NO on another can
-provide a complementary payout. The basic long condition is:
+In our live use, these events have been easier to execute on both legs than the
+other markets we tried. That practical experience motivated this dashboard's
+focus on explicitly selected events rather than continuously rotating markets.
+
+This is an operator observation, not a controlled comparison or a measured
+fill-rate claim. A visible price discrepancy still does not guarantee that both
+orders will fill, even when they are submitted in parallel.
+
+## Strategy
+
+The main workflow buys complementary outcomes of equivalent binary markets:
+
+- BUY YES on venue A.
+- BUY NO on venue B, for the same proposition and matched quantity.
+
+For a pair whose combined settlement payout is one unit, the per-contract entry
+condition is:
 
 ```text
-ask(YES, venue A) + ask(NO, venue B) + fees + cost buffer < 1
+1 - executable YES cost - executable NO cost - fees - cost buffer > minimum edge
 ```
 
-Covered short detection uses bids and requires inventory of both outcomes:
+The detector uses available depth, tick sizes, fee models and book timing; the
+execution path applies additional sizing, admission and freshness checks. A
+top-of-book discrepancy is not enough if the required quantity is unavailable.
 
-```text
-bid(YES, venue A) + bid(NO, venue B) - fees - cost buffer > 1
-```
+The shared engine also implements covered SELL arbitrage, with inventory
+preparation for selected markets. Selling requires existing outcome tokens; it
+is not uncollateralized short selling. The live-testing scope described below
+applies to BUY trades, not to every strategy the code supports.
 
-The detector considers executable depth, tick sizes, book timing and configured
-edge thresholds. The execution path adds admission, risk and freshness checks.
-Orders on different venues are not atomic: one leg can fill while the other
-fails. Recovery is a separate lifecycle and can require operator review.
+## Functionality
 
-These formulas assume matching resolution rules and compatible payout units.
-Similar titles alone do not establish equivalence. Settlement disputes, fees,
-collateral differences and venue availability remain operational risks.
-
-The dashboard is focused on explicitly selected policy events. Recurring-market
-adapters remain in the reusable codebase, but recurring monitoring is disabled
-in the supplied Compose configuration. This is the two-leg cross-venue variant,
-not the three-outcome football strategy.
+- **Event selection:** discover cross-venue candidates and explicitly connect
+  the events to monitor. Contract resolution rules still require operator review.
+- **Market data:** normalize venue books and updates behind common interfaces.
+- **Execution:** prepare and sign venue-specific orders, journal execution state
+  and submit the two legs concurrently.
+- **Recovery:** evaluate completing the missing leg or unwinding unmatched fills,
+  subject to available liquidity, fees and configured loss limits. Uncertain
+  execution can remain in `needs_review` and block further trading.
+- **Accounting:** track orders, fills, positions, cash movements and execution PnL.
+- **Operations:** inspect signals, orders, PnL, pipeline timings and settings in
+  the dashboard; expose Prometheus metrics for queue pressure and event-loop lag.
 
 ## Architecture
 
-```text
-Venue REST / WebSocket adapters
-             |
-      normalized books
-             v
-   bounded event pipeline ---> journal / PostgreSQL projections
-             |
-     engine and domain rules
-             |
-     execution preparation
-             v
-   parallel venue dispatch ---> fills / recovery ---> engine
+The core separates trading concepts and decisions from venue protocols. Domain
+ports describe discovery, market data, fees, execution and inventory operations;
+adapters translate these contracts into REST, WebSocket and SDK calls.
 
-FastAPI control + trading services ---> React dashboard
-                       |
-                Prometheus metrics
+```mermaid
+flowchart TB
+    Venues["Polymarket / Predict.fun / Limitless"]
+    Feeds["Market-data and order-update adapters"]
+
+    subgraph Trading["Trading runtime"]
+        Input["Bounded input buffer"]
+        Engine["Engine: detection, risk and recovery"]
+        Dispatch["Output buffer and parallel order dispatch"]
+        Journal["Ordered execution journal"]
+        Input --> Engine --> Dispatch
+        Input -. "event records" .-> Journal
+        Dispatch -. "prepared orders and results" .-> Journal
+    end
+
+    Venues -->|REST and WebSocket updates| Feeds --> Input
+    Dispatch -->|Signed orders| Venues
+    Journal --> Projection["PostgreSQL projections"]
+    Dashboard["React dashboard"] <-->|HTTP and WebSocket| API["FastAPI control and trading APIs"]
+    API -->|Run controls and configuration| Engine
+    Projection --> API
+    Trading -. "timings and buffer metrics" .-> Metrics["Prometheus metrics"]
+    Metrics --> Dashboard
 ```
 
-| Location | Responsibility |
+### Code organization
+
+| Layer | Responsibility |
 | --- | --- |
-| `src/prediction_markets/domain/` | Contracts, order books, quantities, arbitrage rules and port contracts. |
-| `src/prediction_markets/application/` | Engine state, bounded pipeline, admission, execution and recovery lifecycles. |
-| `src/prediction_markets/infrastructure/` | Venue adapters, journals, database implementations and metrics. |
-| `src/prediction_markets/api/` | FastAPI endpoints, runtime composition and trading controls. |
-| `frontend/` | Event catalog, signals, orders, PnL, pipeline metrics and settings. |
-| `migrations/` | PostgreSQL schema migrations. |
-| `tests/` | Domain, application, adapter and API checks. |
+| [`domain/`](src/prediction_markets/domain/) | Contracts, order books, money and quantity values, arbitrage rules and port definitions. |
+| [`application/`](src/prediction_markets/application/) | Engine state, bounded event pipeline, execution lifecycle, recovery decisions and accounting. |
+| [`infrastructure/`](src/prediction_markets/infrastructure/) | Venue adapters, journal implementation, PostgreSQL persistence and telemetry. |
+| [`api/`](src/prediction_markets/api/) | FastAPI endpoints, runtime composition, preflight checks and trading controls. |
+| [`frontend/`](frontend/) | React, TypeScript and Vite operations dashboard. |
+| [`migrations/`](migrations/) | PostgreSQL schema migrations. |
+| [`tests/`](tests/) | Domain, application, adapter, API and operational regression tests. |
 
-Useful entry points for a code walkthrough:
+For a code walkthrough, start with the [arbitrage rules](src/prediction_markets/domain/arbitrage/services.py),
+[execution port](src/prediction_markets/domain/ports/execution.py),
+[trading engine](src/prediction_markets/application/engine.py),
+[pipeline](src/prediction_markets/application/pipeline/runtime.py) and
+[recovery decisions](src/prediction_markets/application/execution/recovery_decision.py).
 
-- [Arbitrage rules](src/prediction_markets/domain/arbitrage/services.py)
-- [Execution port](src/prediction_markets/domain/ports/execution.py)
-- [Trading engine](src/prediction_markets/application/engine.py)
-- [Pipeline composition](src/prediction_markets/application/pipeline/runtime.py)
-- [Parallel order dispatch](src/prediction_markets/application/pipeline/order_dispatch.py)
-- [Recovery decisions](src/prediction_markets/application/execution/recovery_decision.py)
-- [Dashboard routes](frontend/src/app/routes.tsx)
+### Execution and latency
 
-The code exposes stage timings, event-loop lag and buffer metrics. This snapshot
-does not claim a fixed end-to-end latency; measurements depend on feeds, hardware
-and venue behavior. Market-data workers are configurable in the engine, but the
-included event-dashboard deployment uses single-process market-data handling.
+Trading decisions operate on normalized in-memory state. Order preparation,
+submission and observation are coordinated by the output dispatcher, with
+parallel work for the two venues. Bounded buffers make overload observable;
+they do not eliminate backpressure or make stale quotes executable.
 
-## Local setup
+The control API and trading runtime run as separate services. Although the
+codebase supports market-data worker processes, the supplied event-dashboard
+Compose configuration disables them and disables recurring-market monitoring.
+
+Stage timings, book age, queue usage and event-loop lag are instrumented. There
+is no fixed latency guarantee: feed quality, scheduling, signing and venue
+responses all contribute to the execution timeline.
+
+## Live-testing scope and limitations
+
+### Small order sizes only
+
+Our reported live testing has been limited to **BUY orders of up to EUR 10
+equivalent per venue**. This describes the scope of our experience, not a
+hard-coded EUR limit or evidence that larger orders will behave similarly.
+Actual orders use each venue's quote and collateral currency.
+
+Execution quality at larger sizes has not been established. Displayed depth,
+slippage, partial fills and recovery liquidity can behave differently as size
+increases. Risk limits must be configured explicitly; the dashboard does not
+turn this testing scope into a universal safety guarantee.
+
+### Capital remains committed until settlement
+
+A fully filled pair is not immediately reusable cash. If held to settlement,
+the money committed to the positions remains tied up until the event resolves
+and the relevant venue settles or permits redemption. If the event is weeks or
+months away, that capital may remain unavailable for other opportunities for
+that entire period, potentially longer if resolution is delayed or disputed.
+
+Exiting early requires executable liquidity and may incur fees or give up the
+entry edge. A larger quoted edge is therefore not automatically better than a
+smaller edge with a shorter holding period. This project does not establish an
+optimal capital-allocation or annualized-return policy.
+
+### Execution, resolution and infrastructure risks
+
+- **No cross-venue atomicity:** one leg can fill while the other is rejected,
+  partially filled or uncertain. Parallel submission reduces sequencing delay,
+  not the possibility of residual exposure.
+- **Recovery is conditional:** corrective orders can fail or exceed loss limits.
+  Venue minimums, rounding, dust and excess fills can complicate neutralization;
+  manual review may still be necessary.
+- **Equivalent titles are not equivalent contracts:** deadlines, resolution
+  sources, cancellation rules and exceptional outcomes must match. Different
+  venue decisions can break the assumed complementary payout.
+- **Separate collateral pools:** funds and tokens are venue-specific. Balances,
+  approvals, settlement assets, gas and transfers affect what is executable.
+  A common display unit does not remove currency or stablecoin risk.
+- **Fees and market rules matter:** tick sizes, order minimums, fee schedules and
+  venue order semantics can affect the achievable result. Detection is not a
+  promise of realized PnL.
+- **Operational dependency:** stale feeds, API limits, disconnections, uncertain
+  acknowledgements and process overload can prevent safe execution.
+- **Current preflight is broad:** live trading checks credentials for all three
+  execution venues, as well as database readiness and unresolved executions.
+  Selecting fewer markets does not currently narrow that credential check.
+
+## Run locally
 
 Requirements: Docker with Compose v2. For development outside Docker, use Python
 3.13, `uv`, Node.js 22 and pnpm 11.
 
-1. Copy `.env.example` to `.env` and supply your own configuration. In PowerShell:
+1. Create `.env` from `.env.example` **only if you do not already have one**:
 
    ```powershell
-   Copy-Item .env.example .env
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
    ```
 
-2. Configure the venue credentials you intend to use and a nonempty
-   `TRADING_API_KEY`. Never put wallet keys or API secrets in `VITE_*` variables:
-   frontend variables are public. Compose supplies its own local database DSN.
-3. Start the local stack:
+2. Supply your own venue configuration and a nonempty `TRADING_API_KEY`. Keep
+   signing keys and API secrets out of `VITE_*` variables, which are public
+   frontend configuration. Compose supplies the local database connection.
+3. Build and start the services:
 
    ```sh
    docker compose up --build -d
    ```
 
-4. Open the dashboard at <http://localhost:8080>. API documentation is available
-   at <http://localhost:8000/docs>; Prometheus is at <http://localhost:9090>.
-5. Select events, inspect book freshness and venue health, and review risk limits
-   before explicitly enabling trading. The example file is not a funded demo
-   account. Short inventory preparation may submit on-chain transactions.
+4. Open the [dashboard](http://localhost:8080), inspect connected events and
+   configure risk limits before explicitly enabling trading. The example
+   environment is not a funded demo account.
 
-The local ports bind to loopback. Database, journal and metrics data use new
-Compose-managed volumes; no operational history is included. Running another
-stack on the same ports will cause a conflict. Cloud deployment and private
-alerting infrastructure are outside this snapshot.
+The [API documentation](http://localhost:8000/docs) and
+[Prometheus](http://localhost:9090) are also exposed locally. Ports bind to
+loopback; PostgreSQL, journal and metrics data use Compose-managed volumes.
+Another stack using the same ports will conflict. The optional `alerting`
+profile requires its own receiver configuration and secrets.
 
-To stop services without deleting their data:
+Stop services without deleting their volumes:
 
 ```sh
 docker compose down
 ```
 
-## Development checks
+## Tests and CI
+
+The [GitHub Actions workflow](.github/workflows/ci.yml) runs on pushes to `main`,
+pull requests and manual dispatch. It has two independent jobs:
+
+- **Backend:** install Python 3.13 dependencies from `uv.lock`, then run pytest
+  excluding tests marked `integration`.
+- **Frontend:** install Node.js 22 and pnpm 11 dependencies from the lockfile,
+  then run TypeScript checks, Vitest tests and a production Vite build.
+
+CI has read-only repository permissions. It does not use trading credentials,
+submit orders, publish Docker images or deploy services. A green run checks the
+covered software behavior, not live fills, profitability or settlement safety.
+
+Run the corresponding checks locally:
 
 ```sh
 uv sync --frozen --group dev
@@ -138,14 +236,19 @@ corepack pnpm test
 corepack pnpm build
 ```
 
-Tests marked `integration` contact external services and are excluded above.
-Unit tests and frontend tests use test doubles; passing them does not establish
-live execution safety. CI runs checks only and does not deploy or trade.
+Integration tests contact external services and are excluded above. Local
+diagnostic scripts under `repo_tools/` are intentionally untracked and are not
+required to build or run the application. Tests requiring those optional scripts
+skip when they are absent; the remaining runtime tests still run.
 
-## Snapshot and attribution
+## Repository scope and attribution
 
-This repository starts from a sanitized snapshot of `event-arbitrage-dashboard`.
-It does not carry the original Git history, environment files, account data,
-trade reports, local caches or private cloud configuration. Example environment
-files deliberately contain no usable credentials. Original contributor
-attribution is retained in `pyproject.toml`.
+This repository is a portfolio snapshot of the two-leg cross-venue event
+arbitrage workflow. Other adapters remain as reusable infrastructure, but this
+dashboard is focused on selected political and policy events rather than the
+separate three-outcome sports strategy.
+
+Private environment files, operational reports, trade data and cloud deployment
+configuration are not part of the distributed application. Do not commit keys,
+account exports or live journals. Contributor attribution is retained in
+[`pyproject.toml`](pyproject.toml).

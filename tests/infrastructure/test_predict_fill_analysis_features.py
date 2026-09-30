@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from repo_tools import predict_fill_analysis as analysis
+analysis = pytest.importorskip("repo_tools.predict_fill_analysis")
 
 
 def _row(kind, data, ms=0, *, loss=0):

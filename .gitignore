@@ -78,10 +78,7 @@ data/
 # Tools
 /tools/*
 !/tools/dev.ps1
-/repo_tools/*
-!/repo_tools/reconstruct_trade.py
-!/repo_tools/diagnose_clocks.py
-!/repo_tools/predict_fill_analysis.py
+/repo_tools/
 
 # notes
 notes/

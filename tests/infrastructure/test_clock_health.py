@@ -4,7 +4,6 @@ import pytest
 
 from prediction_markets.infrastructure import clock_health
 from prediction_markets.infrastructure.operational_metrics import LOCAL_CLOCK, update_clock_metrics
-from tests.infrastructure.test_predict_fill_analysis_features import _capture, _book, _row, _report
 
 
 def test_clock_monitor_detects_steps_and_linux_rate_without_claiming_utc_accuracy(monkeypatch):
@@ -51,6 +50,9 @@ def test_sampling_supports_platforms_without_linux_raw_clock(monkeypatch):
 
 def test_negative_source_age_stays_raw_and_is_not_classified_as_fresh(tmp_path, monkeypatch):
     """Unsynchronized clocks must not improve the study's source-freshness bucket."""
+    pytest.importorskip("repo_tools.predict_fill_analysis")
+    from tests.infrastructure.test_predict_fill_analysis_features import _capture, _row, _report
+
     rows = _capture()
     rows[2]["data"]["source_at_ns"] = _row("clock", {}, 1000)["wall_ns"]
     report = _report(tmp_path, monkeypatch, rows)
@@ -63,6 +65,9 @@ def test_negative_source_age_stays_raw_and_is_not_classified_as_fresh(tmp_path, 
 @pytest.mark.parametrize("step", [-500_000_000, 500_000_000])
 def test_clock_step_censors_only_crossing_intervals(tmp_path, monkeypatch, step):
     """Keep earlier evidence while censoring survival through an uncertain clock jump."""
+    pytest.importorskip("repo_tools.predict_fill_analysis")
+    from tests.infrastructure.test_predict_fill_analysis_features import _capture, _book, _row, _report
+
     rows = _capture() + [_book(200)]
     for row in rows:
         if row["mono_ns"] >= _row("clock", {}, 200)["mono_ns"]:
@@ -76,7 +81,7 @@ def test_clock_step_censors_only_crossing_intervals(tmp_path, monkeypatch, step)
 
 def test_ntp_invalid_response_is_not_an_offset_estimate(monkeypatch):
     """An unmatched UDP response cannot certify clock quality."""
-    from repo_tools import diagnose_clocks
+    diagnose_clocks = pytest.importorskip("repo_tools.diagnose_clocks")
 
     class Connection:
         """Return malformed diagnostic bytes without accessing a socket."""
@@ -109,7 +114,7 @@ def test_ntp_invalid_response_is_not_an_offset_estimate(monkeypatch):
 def test_ntp_estimate_bounds_and_wall_step_rejection(monkeypatch, wall_step):
     """Keep asymmetric transit bounds and reject an offset across a wall step."""
     import struct
-    from repo_tools import diagnose_clocks
+    diagnose_clocks = pytest.importorskip("repo_tools.diagnose_clocks")
 
     start = 1_788_854_000_000_000_000
     samples = iter([

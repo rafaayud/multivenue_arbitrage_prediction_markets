@@ -7,11 +7,12 @@ from dataclasses import replace
 import pytest
 
 from prediction_markets.domain.shared.value_objects import ClientOrderID, ContractID, VenueID
-from repo_tools import predict_fill_analysis as analysis
 from prediction_markets.infrastructure.observability import predict_fill_study as study
 from tests.api.test_market_workers import _book, _pair
 from tests.application import test_worker_dispatch_validation as dispatch_fixtures
 from tests.application.test_worker_dispatch_validation import Reason, _reply, _SignedExecution
+
+analysis = pytest.importorskip("repo_tools.predict_fill_analysis")
 
 
 class _CapturedExecution(_SignedExecution):

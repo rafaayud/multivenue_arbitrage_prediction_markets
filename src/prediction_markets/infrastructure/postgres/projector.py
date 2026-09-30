@@ -8,8 +8,6 @@ Responsibilities
 - Keep signed prepared-order payloads out of PostgreSQL.
 """
 
-from __future__ import annotations
-
 import json
 import threading
 import time

@@ -10,5 +10,3 @@
 !migrations/**
 !docker/
 !docker/**
-!repo_tools/
-!repo_tools/predict_fill_analysis.py

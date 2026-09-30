@@ -17,8 +17,12 @@ from prediction_markets.domain.orderbook.value_objects import OrderBookLevel
 from prediction_markets.domain.shared.value_objects import MarketID, OutcomeID, Price, Quantity, Timestamp, VenueID
 from prediction_markets.domain.trading.enums import OrderSide
 from prediction_markets.infrastructure.observability import predict_fill_study as study
-from repo_tools import predict_fill_analysis as analysis
-from repo_tools.predict_fill_analysis import analyze, clean, inventory, order_samples, read_capture, signal_samples
+
+
+@pytest.fixture
+def analysis():
+    """Load the optional local analyzer without skipping runtime-only tests."""
+    return pytest.importorskip("repo_tools.predict_fill_analysis")
 
 
 def _signal():
@@ -41,7 +45,7 @@ def _book():
         arrival_at_ns=mono, received_at_ns=mono, source_timestamp_kind="venue_update")
 
 
-def test_capture_owns_only_diagnostic_files_and_redacts_native_fields(tmp_path, monkeypatch):
+def test_capture_owns_only_diagnostic_files_and_redacts_native_fields(tmp_path, monkeypatch, analysis):
     """Capture books and native order outcomes without credentials or order signatures."""
     root = tmp_path / "predict-fill-study"
     recorder = study.FillStudyRecorder(root, "test")
@@ -55,17 +59,17 @@ def test_capture_owns_only_diagnostic_files_and_redacts_native_fields(tmp_path, 
             "fill": {"executedSizeWei": "5", "signature": "SECRET"}, "signature": "SECRET"})
     finally:
         recorder.close()
-    items = inventory(root)
+    items = analysis.inventory(root)
     assert len(items) == 1
     assert items[0]["manifest"]["code_sha256"]
     assert {entry["path"].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] for entry in items[0]["files"]} == set(study.OWNED_FILES)
-    rows, incomplete = read_capture(recorder.path)
+    rows, incomplete = analysis.read_capture(recorder.path)
     assert not incomplete
     assert "SECRET" not in json.dumps(rows)
     assert {row["kind"] for row in rows} >= {"book", "signal", "private", "predict_payload"}
     assert len([r for r in rows if r["kind"] == "private"]) == 2
     assert json.loads((recorder.path / "summary.json").read_text())["counts"].get("observer_errors", 0) == 0
-    assert analyze(root)["signals"] == 1
+    assert analysis.analyze(root)["signals"] == 1
 
 
 def test_full_queue_does_not_block_producers_and_capture_is_bounded(tmp_path, monkeypatch):
@@ -110,7 +114,7 @@ def test_observer_failures_do_not_escape_and_disabled_mode_creates_nothing(tmp_p
         recorder.close()
 
 
-def test_clean_requires_a_closed_owned_run_and_preserves_journal(tmp_path):
+def test_clean_requires_a_closed_owned_run_and_preserves_journal(tmp_path, analysis):
     """Only explicitly confirmed, manifest-owned diagnostic artifacts are removable."""
     journal = tmp_path / "trading.log"
     journal.write_bytes(b"financial evidence")
@@ -118,13 +122,13 @@ def test_clean_requires_a_closed_owned_run_and_preserves_journal(tmp_path):
     recorder = study.FillStudyRecorder(root, "test")
     try:
         with pytest.raises(ValueError, match="not closed"):
-            clean(root, recorder.run_id)
+            analysis.clean(root, recorder.run_id)
     finally:
         recorder.close()
     with pytest.raises(ValueError, match="Unknown"):
-        clean(root, "wrong-id")
-    clean(root, recorder.run_id)
-    assert inventory(root) == []
+        analysis.clean(root, "wrong-id")
+    analysis.clean(root, recorder.run_id)
+    assert analysis.inventory(root) == []
     assert journal.read_bytes() == b"financial evidence"
 
 
@@ -152,9 +156,9 @@ def _rows():
     return rows
 
 
-def test_horizon_analysis_separates_source_age_local_age_and_new_confirmation():
+def test_horizon_analysis_separates_source_age_local_age_and_new_confirmation(analysis):
     """Keep raw source delay separate and never treat a cached book as a new update."""
-    sample = signal_samples(_rows())[0]
+    sample = analysis.signal_samples(_rows())[0]
     assert sample["predict_source_age_ms"] == 300
     assert sample["predict_local_age_ms"] == 10
     assert sample["predict_depth_ratio"] == "2"
@@ -163,20 +167,20 @@ def test_horizon_analysis_separates_source_age_local_age_and_new_confirmation():
     assert sample["horizons"][1]["new_predict_confirmation"] is True
     rows = _rows()
     rows[-1]["loss_epoch"] = 1
-    assert all(p["reason"] == "capture_loss" for p in signal_samples(rows)[0]["horizons"])
-    assert all(p["displayed_executable"] is None for p in signal_samples(rows)[0]["horizons"])
+    assert all(p["reason"] == "capture_loss" for p in analysis.signal_samples(rows)[0]["horizons"])
+    assert all(p["displayed_executable"] is None for p in analysis.signal_samples(rows)[0]["horizons"])
 
 
-def test_outcomes_use_unique_successes_not_cancelled_application_status():
+def test_outcomes_use_unique_successes_not_cancelled_application_status(analysis):
     """A cancelled order can be filled; a cancelled zero-fill snapshot stays unknown."""
     order = {"venue": "PREDICT", "client_id": "client", "quantity": "5", "native": {"hash": "0xABC"}}
     success = {"type": "orderTransactionSuccess", "orderHash": "0xabc", "settlementId": "one",
         "fill": {"executedSizeWei": str(5 * 10**18)}}
     rows = [_row("prepared", order), _row("private", success), _row("private", success),
         _row("private", {"type": "orderCancelled", "orderHash": "0xabc"})]
-    assert order_samples(rows)[0]["confirmed_filled"] == "5"
-    assert order_samples(rows)[0]["outcome"] == "filled"
-    assert order_samples([rows[0], rows[-1]])[0]["outcome"] == "unresolved"
+    assert analysis.order_samples(rows)[0]["confirmed_filled"] == "5"
+    assert analysis.order_samples(rows)[0]["outcome"] == "filled"
+    assert analysis.order_samples([rows[0], rows[-1]])[0]["outcome"] == "unresolved"
 
 
 @pytest.mark.parametrize("evidence,state", (
@@ -187,16 +191,16 @@ def test_outcomes_use_unique_successes_not_cancelled_application_status():
     ([("venue_verification", {"hash": "0xabc", "status": "UNKNOWN", "filled": None})], "unknown"),
     ([("venue_verification", {"hash": "0xabc", "status": "cancelled", "filled": "0"})], "venue_observed"),
 ))
-def test_order_analysis_separates_preparation_attempt_and_venue_evidence(evidence, state):
+def test_order_analysis_separates_preparation_attempt_and_venue_evidence(evidence, state, analysis):
     """Missing capture and application rejection cannot establish a venue no-fill."""
     order = {"venue": "PREDICT", "client_id": "client", "quantity": "5", "native": {"hash": "0xabc"}}
-    result = order_samples([_row("prepared", order), *(_row(kind, data) for kind, data in evidence)])[0]
+    result = analysis.order_samples([_row("prepared", order), *(_row(kind, data) for kind, data in evidence)])[0]
     assert result["submission_state"] == state
     assert result["outcome"] == ("submission_unknown" if state == "unknown" else "unresolved")
     assert result["confirmed_filled"] == "0"
 
 
-def test_venue_comparison_excludes_prepared_orders_without_submission_evidence(tmp_path, monkeypatch):
+def test_venue_comparison_excludes_prepared_orders_without_submission_evidence(tmp_path, monkeypatch, analysis):
     """Four locally rejected preparations must not become four venue execution outcomes."""
     rows = []
     for index in range(5):
@@ -210,7 +214,7 @@ def test_venue_comparison_excludes_prepared_orders_without_submission_evidence(t
     monkeypatch.setattr(analysis, "inventory", lambda root: [{"slot": str(tmp_path),
         "manifest": {"run_id": "run", "producer": "test"}}])
     monkeypatch.setattr(analysis, "read_capture", lambda slot: (rows, False))
-    report = analyze(tmp_path)
+    report = analysis.analyze(tmp_path)
     assert len(report["orders"]) == 5
     assert report["outcomes"] == {"unresolved": 1, "submission_unknown": 4}
     assert report["submission_states"] == {"venue_observed": 1, "unknown": 4}
@@ -221,26 +225,26 @@ def test_venue_comparison_excludes_prepared_orders_without_submission_evidence(t
         "execution_id": "attempt-execution", "role": "hedge", "quantity": "5",
         "native": {"hash": "0xattempt", "strategy": "LIMIT", "isFillOrKill": False}}),
         _row("submit_started", {"client_id": "attempt-only"})))
-    comparisons = analyze(tmp_path)["comparisons"]
+    comparisons = analysis.analyze(tmp_path)["comparisons"]
     assert {group["submission_state"]: group["count"] for group in comparisons} == {
         "venue_observed": 1, "attempt_observed": 1,
     }
 
 
-def test_horizons_accept_later_writer_drain_without_using_future_books():
+def test_horizons_accept_later_writer_drain_without_using_future_books(analysis):
     """A transient writer backlog is not data loss once its FIFO drains intact."""
     rows = _rows()
     rows.extend(_row("heartbeat", {"queue_depth": 1}, ms) for ms in (110, 260, 510))
-    horizons = signal_samples(rows)[0]["horizons"]
+    horizons = analysis.signal_samples(rows)[0]["horizons"]
     assert [p["reason"] for p in horizons] == [None, None, None]
     assert [p["displayed_executable"] for p in horizons] == [True, False, False]
 
     rows[4]["loss_epoch"] = 1
-    assert all(p["reason"] == "capture_loss" for p in signal_samples(rows)[0]["horizons"])
+    assert all(p["reason"] == "capture_loss" for p in analysis.signal_samples(rows)[0]["horizons"])
 
     rows[4]["data"]["queue_depth"] = 1
     rows[4]["loss_epoch"] = 0
-    assert all(p["reason"] == "writer_backlog" for p in signal_samples(rows)[0]["horizons"])
+    assert all(p["reason"] == "writer_backlog" for p in analysis.signal_samples(rows)[0]["horizons"])
 
 
 def test_disk_and_slot_limits_stop_only_optional_capture(tmp_path, monkeypatch):
@@ -430,7 +434,7 @@ def _spawn_capture(root, ready, release):
         recorder.close()
 
 
-def test_concurrent_spawned_recorders_reuse_slots_without_collisions_or_orphans(tmp_path):
+def test_concurrent_spawned_recorders_reuse_slots_without_collisions_or_orphans(tmp_path, analysis):
     """Several real processes reserve distinct slots while deleting old runs as groups."""
     _closed_run(tmp_path, (0, 1), "oldest", 1)
     for index in range(2, study.SLOTS):
@@ -455,7 +459,7 @@ def test_concurrent_spawned_recorders_reuse_slots_without_collisions_or_orphans(
         ready.close()
         ready.join_thread()
     assert all(worker.exitcode == 0 for worker in workers)
-    items = inventory(tmp_path)
+    items = analysis.inventory(tmp_path)
     assert len(items) == study.SLOTS
     assert all({Path(entry["path"]).name for entry in item["files"]} == set(study.OWNED_FILES) for item in items)
     assert {item["manifest"]["run_id"] for item in items} >= {run_id for run_id, slot in captures}

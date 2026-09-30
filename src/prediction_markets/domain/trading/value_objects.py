@@ -5,8 +5,6 @@ Responsibilities
 - Enforce domain invariants at construction time.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -469,7 +467,7 @@ class SubmissionResult:
 
     status: SubmissionStatus
     reference: OrderReference
-    snapshot: OrderSnapshot | None = None
+    snapshot: "OrderSnapshot | None" = None
     reason: str | None = None
 
 
@@ -485,7 +483,7 @@ class ReconciliationResult:
 
     status: ReconciliationStatus
     reference: OrderReference
-    snapshot: OrderSnapshot | None = None
+    snapshot: "OrderSnapshot | None" = None
 
     def __post_init__(self) -> None:
         if (self.status is ReconciliationStatus.FOUND) != (self.snapshot is not None):

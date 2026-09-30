@@ -16,7 +16,6 @@ from prediction_markets.domain.shared.value_objects import MarketID, OutcomeID, 
 from prediction_markets.domain.trading.enums import OrderSide
 from prediction_markets.domain.trading.value_objects import OrderBookDecisionSnapshot
 from prediction_markets.infrastructure.observability import predict_fill_study as study
-from repo_tools.predict_fill_analysis import signal_samples
 
 
 def _book(contract="predict:42:yes", market="42", venue="PREDICT"):
@@ -155,6 +154,7 @@ def test_ring_eviction_reports_unknown_precoverage(tmp_path, monkeypatch):
 def test_two_second_analysis_uses_retained_baseline_before_delayed_trigger(
         tmp_path, monkeypatch, delay_ms, idle, complete):
     """Retain two seconds before detection, without shifting idle-book timestamps."""
+    signal_samples = pytest.importorskip("repo_tools.predict_fill_analysis").signal_samples
     clock = [10_000_000_000]
     wall_offset = 1_700_000_000_000_000_000
     monkeypatch.setattr(study.time, "monotonic_ns", lambda: clock[0])

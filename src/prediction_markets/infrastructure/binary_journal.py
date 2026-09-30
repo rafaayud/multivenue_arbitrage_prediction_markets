@@ -8,8 +8,6 @@ Responsibilities
 - Read retained segments as one continuous sequence and repair only the active tail.
 """
 
-from __future__ import annotations
-
 import os
 import re
 import struct
