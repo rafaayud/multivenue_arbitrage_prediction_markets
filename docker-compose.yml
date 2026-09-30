@@ -1,0 +1,176 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      POSTGRES_DSN: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
+      DATABASE_URL: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
+      MARKET_DATA_WORKERS_MODE: disabled
+      MARKET_RECURRING_MARKETS_ENABLED: "0"
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  trading:
+    build: .
+    command:
+      - /app/.venv/bin/uvicorn
+      - prediction_markets.api.trading_main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    env_file: .env
+    environment:
+      POSTGRES_DSN: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
+      DATABASE_URL: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
+      JOURNAL_PATH: /app/data/trading.log
+      MARKET_DATA_WORKERS_MODE: disabled
+      MARKET_RECURRING_MARKETS_ENABLED: "0"
+      # Reject venue updates older than 500 ms at the parent submission guard.
+      MARKET_DATA_ENFORCE_SOURCE_AGE: "true"
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - journal-data:/app/data
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - api
+      - trading
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: prediction_markets
+      POSTGRES_USER: prediction_markets
+      POSTGRES_PASSWORD: prediction_markets
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prediction_markets -d prediction_markets"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ${PROMETHEUS_CONFIG_PATH:-./prometheus.yml}:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  alertmanager:
+    image: prom/alertmanager:v0.33.1
+    profiles: ["alerting"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    configs:
+      - source: alertmanager-config
+        target: /etc/alertmanager/alertmanager.yml
+    secrets:
+      - alertmanager-gmail-app-password
+      - alertmanager-pagerduty-routing-key
+      - alertmanager-push-webhook-url
+      - alertmanager-push-webhook-token
+    volumes:
+      - alertmanager-data:/alertmanager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/healthy || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+configs:
+  alertmanager-config:
+    content: |
+      global:
+        # API alerts are emitted once and explicitly resolved by the application.
+        resolve_timeout: 720h
+        smtp_smarthost: "smtp.gmail.com:587"
+        smtp_from: "${ALERT_GMAIL_ADDRESS:-alerts@example.invalid}"
+        smtp_auth_username: "${ALERT_GMAIL_ADDRESS:-alerts@example.invalid}"
+        smtp_auth_password_file: /run/secrets/alertmanager-gmail-app-password
+        smtp_require_tls: true
+
+      route:
+        receiver: discard
+        group_by: [fingerprint, recipient, channel]
+        group_wait: 1s
+        group_interval: 5m
+        repeat_interval: 24h
+        routes:
+          - receiver: gmail
+            matchers:
+              - channel="email"
+          - receiver: pagerduty-sms
+            matchers:
+              - channel="sms"
+          - receiver: mobile-push
+            matchers:
+              - channel="push"
+
+      receivers:
+        - name: discard
+        - name: gmail
+          email_configs:
+            - to: "${ALERT_GMAIL_TO:-alerts@example.invalid}"
+              send_resolved: true
+              headers:
+                Subject: '[{{ .Status | toUpper }}][{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}'
+        - name: pagerduty-sms
+          pagerduty_configs:
+            - routing_key_file: /run/secrets/alertmanager-pagerduty-routing-key
+              send_resolved: true
+              severity: critical
+              source: '{{ .CommonLabels.component }}'
+              description: '[{{ .CommonLabels.severity }}] {{ .CommonLabels.alertname }}: {{ .CommonAnnotations.description }}'
+        - name: mobile-push
+          webhook_configs:
+            - url_file: /run/secrets/alertmanager-push-webhook-url
+              send_resolved: true
+              timeout: 5s
+              http_config:
+                authorization:
+                  type: Bearer
+                  credentials_file: /run/secrets/alertmanager-push-webhook-token
+
+secrets:
+  alertmanager-gmail-app-password:
+    environment: ALERT_GMAIL_APP_PASSWORD
+  alertmanager-pagerduty-routing-key:
+    environment: ALERT_PAGERDUTY_ROUTING_KEY
+  alertmanager-push-webhook-url:
+    environment: ALERT_PUSH_WEBHOOK_URL
+  alertmanager-push-webhook-token:
+    environment: ALERTMANAGER_WEBHOOK_TOKEN
+
+volumes:
+  journal-data:
+  postgres-data:
+  prometheus-data:
+  alertmanager-data:

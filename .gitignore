@@ -1,0 +1,113 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+
+# Frontend build artifacts
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.ruff_cache/
+.pytest_cache/
+.test-tmp-*/
+pytest-tmp-*/
+
+# LaTeX build artifacts
+notes/output/**/*.aux
+notes/output/**/*.bbl
+notes/output/**/*.bcf
+notes/output/**/*.blg
+notes/output/**/*.fdb_latexmk
+notes/output/**/*.fls
+notes/output/**/*.out
+notes/output/**/*.run.xml
+notes/output/**/*.toc
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.mobile.example
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+credentials*.json
+*.sqlite
+*.sqlite3
+frontend/.env.mobile.local
+secrets/
+
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Kalshi
+kalshi_private.pem
+
+# Agents
+.agents/
+.codexignore
+.codex/
+
+# Scripts
+scripts/
+data/
+
+# UV
+.uv-cache/
+
+# Tools
+/tools/*
+!/tools/dev.ps1
+/repo_tools/*
+!/repo_tools/reconstruct_trade.py
+!/repo_tools/diagnose_clocks.py
+!/repo_tools/predict_fill_analysis.py
+
+# notes
+notes/
+
+# Graphify (generated knowledge graph)
+graphify-out/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+
+# Council
+council/
+
+.tmp/
+.runtime/
+
+
+docs/
+logs/
+
+reports/
+
+# Firebase iOS config (project-specific; download from Firebase Console)
+frontend/ios/App/App/GoogleService-Info.plist
+.pnpm-store/
+data/

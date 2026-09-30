@@ -1,0 +1,14 @@
+*
+!.dockerignore
+!Dockerfile
+!README.md
+!pyproject.toml
+!uv.lock
+!src/
+!src/**
+!migrations/
+!migrations/**
+!docker/
+!docker/**
+!repo_tools/
+!repo_tools/predict_fill_analysis.py

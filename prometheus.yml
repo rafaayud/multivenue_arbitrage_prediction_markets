@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: prediction-markets-api
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: prediction-markets-trading
+    static_configs:
+      - targets: ["trading:8001"]

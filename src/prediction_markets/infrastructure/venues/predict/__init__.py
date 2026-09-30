@@ -1,0 +1,1 @@
+"""Predict.fun infrastructure adapters."""
