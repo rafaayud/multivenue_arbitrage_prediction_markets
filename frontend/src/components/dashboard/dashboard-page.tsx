@@ -4,6 +4,7 @@ import {
   EyeOff,
   LoaderCircle,
   RadioTower,
+  TriangleAlert,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -89,6 +90,29 @@ export function DashboardPage() {
           />
         }
       />
+
+      <aside
+        aria-label="Real-money trading notice"
+        className="mb-5 flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-4"
+      >
+        <TriangleAlert
+          aria-hidden="true"
+          className="mt-0.5 size-5 shrink-0 text-amber-700 dark:text-amber-300"
+        />
+        <div>
+          <p className="text-sm font-medium">
+            {tradingActive
+              ? "Live trading can use real funds"
+              : "Explore the market before enabling real-money trading"}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Monitoring events and inspecting feed latency do not require live
+            trading. Enabling trading can submit real orders; signals do not
+            guarantee profit, and unmatched fills can lose money. Review the
+            warnings and limits before starting.
+          </p>
+        </div>
+      </aside>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatusCard

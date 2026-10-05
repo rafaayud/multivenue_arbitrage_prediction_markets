@@ -1,4 +1,4 @@
-import { LoaderCircle, Power, PowerOff } from "lucide-react"
+import { LoaderCircle, Power, PowerOff, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 
 import {
@@ -39,7 +39,7 @@ const DEFAULT_SIGNAL_SETTINGS: SignalSettings = {
   cost_buffer: 0,
 }
 
-/** Confirm live-run limits and opt-in Predict pricing before enabling trading. */
+/** Require risk acknowledgement, credentials and valid limits before starting a live run. */
 export function TradingControl({
   controller,
   signalSettings = DEFAULT_SIGNAL_SETTINGS,
@@ -50,6 +50,7 @@ export function TradingControl({
   shortMarketKeys?: string[]
 }) {
   const [tradingKey, setTradingKey] = useState("")
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false)
   const [maxArbitrages, setMaxArbitrages] = useState(
     String(DEFAULT_SETTINGS.max_arbitrages),
   )
@@ -112,8 +113,10 @@ export function TradingControl({
     settings.max_recovery_loss <= 8
 
   const enable = (allowDegradedVenues: boolean) => {
-    const key = tradingKey
+    const key = tradingKey.trim()
+    if (busy || !key || !settingsValid || !riskAcknowledged) return
     setTradingKey("")
+    setRiskAcknowledged(false)
     void controller.enable(
       key,
       allowDegradedVenues
@@ -161,7 +164,12 @@ export function TradingControl({
             </AlertDialogContent>
           </AlertDialog>
         ) : (
-          <AlertDialog>
+          <AlertDialog
+            onOpenChange={() => {
+              setTradingKey("")
+              setRiskAcknowledged(false)
+            }}
+          >
             <AlertDialogTrigger asChild>
               <Button disabled={busy}>
                 {busy ? (
@@ -177,11 +185,50 @@ export function TradingControl({
                 <AlertDialogTitle>Enable live trading?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This starts the execution worker and can place real orders
-                  with real funds. Each venue amount is a maximum per
-                  arbitrage; both legs always use the same share quantity.
-                  This event workspace never submits recurring crypto markets.
+                  with real funds. Each venue amount is a maximum per arbitrage;
+                  both legs always use the same share quantity. This event
+                  workspace never submits recurring crypto markets.
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              <section
+                aria-labelledby="real-money-warning"
+                className="mt-4 rounded-xl border border-amber-500/35 bg-amber-500/10 p-4"
+              >
+                <h3
+                  id="real-money-warning"
+                  className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200"
+                >
+                  <TriangleAlert
+                    aria-hidden="true"
+                    className="size-5 shrink-0"
+                  />
+                  Real funds at risk — this is not a simulation
+                </h3>
+                <ul className="mt-3 list-disc space-y-2 pl-5 text-xs leading-relaxed">
+                  <li>
+                    A displayed arbitrage signal is not guaranteed profit. One
+                    leg can fill while the other fails, leaving an exposed
+                    position.
+                  </li>
+                  <li>
+                    Fees, slippage and recovery trades can cause losses. The
+                    recovery limit is not a guaranteed cap on your total loss.
+                  </li>
+                  <li>
+                    Funds can remain committed until settlement. Similar event
+                    titles may have different resolution rules across venues.
+                  </li>
+                  <li>
+                    Review venue balances, collateral approvals and these limits
+                    before starting. Stopping the run does not automatically
+                    close existing positions.
+                  </li>
+                </ul>
+                <p className="mt-3 text-xs font-medium">
+                  You can inspect signals and feed latency with trading
+                  disabled.
+                </p>
+              </section>
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
                 <label className="block text-xs font-medium">
                   Arbitrages before stop
@@ -276,23 +323,26 @@ export function TradingControl({
                 <input
                   type="checkbox"
                   checked={predictUseEdgeBudget}
-                  onChange={(event) => setPredictUseEdgeBudget(event.target.checked)}
+                  onChange={(event) =>
+                    setPredictUseEdgeBudget(event.target.checked)
+                  }
                 />
                 Predict: use available edge (experimental)
               </label>
               {predictUseEdgeBudget && (
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Replaces fixed ticks. Keeps the original quantity and the other
-                  venue limit, reserving your minimum edge and cost buffer after
-                  fees. A one-leg fill can still cause a loss.
+                  Replaces fixed ticks. Keeps the original quantity and the
+                  other venue limit, reserving your minimum edge and cost buffer
+                  after fees. A one-leg fill can still cause a loss.
                 </p>
               )}
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Minimum accepted budget: 1 USDC per venue. The actual spend
-                can be lower than the selected maximum. Fees are always
-                deducted; edge and buffer are additional margins. Every
-                connected event can execute long arbitrage; only events marked
-                on the dashboard can prepare and execute covered shorts.
+                Minimum accepted budget: 1 unit of each venue's quote currency
+                (USDC or USDT). The actual spend can be lower than the selected
+                maximum. Fees are always deducted; edge and buffer are
+                additional margins. Every connected event can execute long
+                arbitrage; only events marked on the dashboard can prepare and
+                execute covered shorts.
               </p>
               {shortMarketKeys.length > 0 && (
                 <p className="mt-3 rounded-md border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-200">
@@ -312,19 +362,45 @@ export function TradingControl({
                   className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </label>
+              <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={riskAcknowledged}
+                  onChange={(event) =>
+                    setRiskAcknowledged(event.target.checked)
+                  }
+                  className="mt-0.5 size-4 shrink-0 accent-primary"
+                />
+                I understand this uses real funds and I can lose money.
+              </label>
+              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                “Enable despite degraded” overrides degraded venue-health
+                checks; order submission or recovery may fail. Unavailable
+                venues still block startup.
+              </p>
               <AlertDialogFooter className="flex-wrap">
                 <AlertDialogCancel onClick={() => setTradingKey("")}>
                   Cancel
                 </AlertDialogCancel>
                 <AlertDialogAction
                   className="bg-amber-500 text-black hover:bg-amber-400"
-                  disabled={tradingKey.length === 0 || !settingsValid}
+                  disabled={
+                    busy ||
+                    !tradingKey.trim() ||
+                    !settingsValid ||
+                    !riskAcknowledged
+                  }
                   onClick={() => enable(true)}
                 >
                   Enable despite degraded
                 </AlertDialogAction>
                 <AlertDialogAction
-                  disabled={tradingKey.length === 0 || !settingsValid}
+                  disabled={
+                    busy ||
+                    !tradingKey.trim() ||
+                    !settingsValid ||
+                    !riskAcknowledged
+                  }
                   onClick={() => enable(false)}
                 >
                   Enable live trading

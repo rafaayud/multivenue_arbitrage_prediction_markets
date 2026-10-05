@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/rafaayud/multivenue_arbitrage_prediction_markets/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rafaayud/multivenue_arbitrage_prediction_markets/actions/workflows/ci.yml)
 
-An event-driven prediction-market arbitrage engine built with **hexagonal
-architecture, FastAPI and React**.
+A modular, event-driven prediction-market arbitrage engine with an
+**LMAX-inspired processing pipeline**, built with **FastAPI and React**.
 
 Detect and execute two-leg opportunities across **Polymarket, Predict.fun and
 Limitless**, with an operations dashboard for signals, execution, recovery and
@@ -38,6 +38,26 @@ The current live-trading preflight requires credentials for **all three executio
 venues**, even when the selected event uses only two. See [`.env.example`](.env.example)
 for additional settings, including RPC and relayer configuration for inventory
 operations. No API keys or funded accounts are bundled with the project.
+
+## Before using real funds
+
+**Running locally does not make this a simulation.** With funded venue accounts
+and live trading enabled, the application can submit real orders and on-chain
+transactions. Do not fund accounts solely to obtain screenshots or latency data.
+
+- Connect events with trading disabled to inspect market data, detected signals
+  and feed latency. Submission, acknowledgement and fill timings require actual
+  order attempts and may remain empty during observation.
+- A signal is an observed price discrepancy, not guaranteed profit. One leg may
+  fill while the other fails, and fees, slippage or recovery can produce losses.
+- Check contract resolution rules on both venues. Capital may remain committed
+  until settlement, and stopping the worker does not automatically close positions.
+- Review balances, collateral approvals and per-venue limits before enabling
+  trading. The configured recovery-loss limit is not a guarantee on total losses.
+
+The dashboard displays these risks before live startup and requires an explicit
+risk acknowledgement in addition to the trading key and valid run limits. This
+confirmation also applies when overriding degraded venue-health checks.
 
 ## Why political and policy events?
 
@@ -132,6 +152,23 @@ the completed-entry path: the execution can require recovery or manual review.
   the dashboard; expose Prometheus metrics for queue pressure and event-loop lag.
 
 ## Architecture
+
+The project combines modular code organization, ports-and-adapters integrations
+and an LMAX-inspired event-processing pipeline. These describe different aspects
+of the system:
+
+| Concept | How it applies here |
+| --- | --- |
+| **Modularity** | Domain rules, application processing, venue integrations, persistence and the dashboard have separate responsibilities. |
+| **Ports and adapters** | Domain-owned interfaces describe venue capabilities; infrastructure adapters implement them. This follows the boundary-separation idea of [hexagonal architecture](https://alistair.cockburn.us/hexagonal-architecture). |
+| **LMAX-inspired processing** | Bounded input/output rings surround an in-memory engine with sequential input processing, an ordered execution journal, replay of durable events and separate asynchronous order dispatch. This resembles the processing structure described in [The LMAX Architecture](https://martinfowler.com/articles/lmax.html). |
+
+The implementation uses Python `asyncio` and event-loop-confined ring buffers,
+not the LMAX Disruptor. Order preparation and venue I/O run in dispatcher tasks;
+PostgreSQL projections run asynchronously. Application pipeline modules also
+depend directly on infrastructure telemetry, so strict hexagonal dependency
+isolation is not enforced across the entire application. These architectural
+similarities imply no equivalent throughput or latency guarantees.
 
 The core separates trading concepts and decisions from venue protocols. Domain
 ports describe discovery, market data, fees, execution and inventory operations;

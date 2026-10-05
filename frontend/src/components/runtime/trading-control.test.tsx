@@ -52,6 +52,16 @@ describe("TradingControl", () => {
     expect(confirm).toBeDisabled()
 
     await user.type(screen.getByLabelText("Trading API key"), "secret")
+    expect(confirm).toBeDisabled()
+    expect(
+      screen.getByRole("button", { name: "Enable despite degraded" }),
+    ).toBeDisabled()
+    expect(screen.getByText(/Real funds at risk/)).toBeVisible()
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    )
     await user.click(confirm)
 
     expect(value.enable).toHaveBeenCalledWith("secret", {
@@ -82,9 +92,7 @@ describe("TradingControl", () => {
     )
 
     await user.click(screen.getByRole("button", { name: /enable trading/i }))
-    expect(
-      screen.getByText(/1 short market is selected/i),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/1 short market is selected/i)).toBeInTheDocument()
     await user.clear(screen.getByLabelText("Arbitrages before stop"))
     await user.type(screen.getByLabelText("Arbitrages before stop"), "3")
     await user.clear(screen.getByLabelText("Concurrent arbitrages"))
@@ -100,6 +108,11 @@ describe("TradingControl", () => {
     await user.clear(screen.getByLabelText("Recovery max loss (USD)"))
     await user.type(screen.getByLabelText("Recovery max loss (USD)"), "0.5")
     await user.type(screen.getByLabelText("Trading API key"), "secret")
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    )
     await user.click(
       screen.getByRole("button", {
         name: "Enable live trading",
@@ -129,21 +142,35 @@ describe("TradingControl", () => {
     const value = controller(null)
     render(<TradingControl controller={value} />)
     await user.click(screen.getByRole("button", { name: /enable trading/i }))
-    const option = screen.getByRole("checkbox", { name: /Predict: use available edge/i })
+    const option = screen.getByRole("checkbox", {
+      name: /Predict: use available edge/i,
+    })
     expect(option).not.toBeChecked()
     await user.click(option)
     expect(screen.getByLabelText("Predict slippage (ticks)")).toBeDisabled()
-    expect(screen.getByText(/one-leg fill can still cause a loss/i)).toBeVisible()
+    expect(
+      screen.getByText(/one-leg fill can still cause a loss/i),
+    ).toBeVisible()
     await user.click(option)
     expect(screen.getByLabelText("Predict slippage (ticks)")).toBeEnabled()
     await user.click(option)
     await user.type(screen.getByLabelText("Trading API key"), "secret")
-    await user.click(screen.getByRole("button", { name: "Enable live trading" }))
-    expect(value.enable).toHaveBeenCalledWith("secret", expect.objectContaining({
-      predict_use_edge_budget: true,
-      predict_limit_slippage_ticks: 2,
-      max_arbitrages: 1,
-    }))
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Enable live trading" }),
+    )
+    expect(value.enable).toHaveBeenCalledWith(
+      "secret",
+      expect.objectContaining({
+        predict_use_edge_budget: true,
+        predict_limit_slippage_ticks: 2,
+        max_arbitrages: 1,
+      }),
+    )
   })
 
   test("can explicitly start while venue health is degraded", async () => {
@@ -153,6 +180,14 @@ describe("TradingControl", () => {
 
     await user.click(screen.getByRole("button", { name: /enable trading/i }))
     await user.type(screen.getByLabelText("Trading API key"), "secret")
+    expect(
+      screen.getByRole("button", { name: "Enable despite degraded" }),
+    ).toBeDisabled()
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    )
     await user.click(
       screen.getByRole("button", { name: "Enable despite degraded" }),
     )
@@ -177,6 +212,31 @@ describe("TradingControl", () => {
     )
 
     expect(value.disable).toHaveBeenCalledOnce()
+  })
+
+  test("requires a fresh risk acknowledgement and key after cancelling", async () => {
+    const user = userEvent.setup()
+    const value = controller(null)
+    render(<TradingControl controller={value} />)
+    await user.click(screen.getByRole("button", { name: /enable trading/i }))
+    await user.type(screen.getByLabelText("Trading API key"), "secret")
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    )
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    await user.click(screen.getByRole("button", { name: /enable trading/i }))
+    expect(
+      screen.getByRole("checkbox", {
+        name: /I understand this uses real funds/,
+      }),
+    ).not.toBeChecked()
+    expect(screen.getByLabelText("Trading API key")).toHaveValue("")
+    expect(
+      screen.getByRole("button", { name: "Enable live trading" }),
+    ).toBeDisabled()
+    expect(value.enable).not.toHaveBeenCalled()
   })
 
   test("shows collateral preparation as an active run", () => {
