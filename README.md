@@ -92,6 +92,74 @@ preparation for selected markets. Selling requires existing outcome tokens; it
 is not uncollateralized short selling. The live-testing scope described below
 applies to BUY trades, not to every strategy the code supports.
 
+### Preparing inventory for covered SHORT trades
+
+When you select an event for SHORT execution and enable live trading, the
+runtime checks inventory on each participating venue. The current target is
+**5 complete YES/NO sets per selected venue market**: for an event connected
+on two venues, inventory is prepared on both. Starting without outcome tokens,
+this requires splitting **5 units of each venue's collateral** into 5 YES and
+5 NO tokens on that venue. These are collateral-token units, not euros
+(the current adapters use pUSD on Polymarket and USDT on Predict).
+
+This uses and locks existing funded collateral; it does not create money or
+credit. Existing complete sets count toward the target, so only the deficit is
+split. Selecting additional markets can require additional collateral.
+
+For these explicitly selected regular events, the runtime **does not continuously
+replenish inventory after each SHORT**. To prepare another allocation after
+inventory is consumed, stop and start trading again with the desired SHORT events
+selected. Startup checks balances and replenishes the deficit up to the same
+5-set target; restarting does not increase that target or add an unconditional
+5 units. The available inventory and execution limits determine how many trades
+it can support. See the
+[short inventory service](src/prediction_markets/application/execution/short_inventory.py).
+
+### Observed signal: two views of the same opportunity
+
+On **6 October 2026 at 18:43:15 Europe/Madrid (16:43:15 UTC)**, the dashboard
+displayed the following signals for **"Will Jon Ossoff win the 2028 US Presidential
+Election?"**. Both observations are persisted in the local backend's opportunity
+history; these are detection records, not executed trades or realized returns.
+
+| Displayed signal | Predict.fun leg | Polymarket leg | Observed quantity per leg | Net edge shown |
+| --- | --- | --- | ---: | ---: |
+| **LONG** | BUY NO at 0.881 | BUY YES at 0.105 | 409.95 | 0.75% |
+| **SHORT** | SELL YES at 0.119 | SELL NO at 0.895 | 409.95 | 0.79% |
+
+**These two rows express the same cross-venue price discrepancy.** Predict's
+YES order book also supplies the NO prices: the
+[Predict adapter](src/prediction_markets/infrastructure/venues/predict/mappers.py)
+complements prices and swaps sides while preserving each level's quantity:
+
+```text
+NO ask = 1 - YES bid
+NO bid = 1 - YES ask
+
+LONG gross edge  = 1 - (0.881 + 0.105) = 0.014
+SHORT gross edge =     0.119 + 0.895 - 1 = 0.014
+```
+
+Here, `0.881 = 1 - 0.119`, and the observed Polymarket prices are also
+complementary (`0.895 = 1 - 0.105`). Both routes therefore expose the same gross
+edge of **1.4% of the unit payout**, rather than two independent sources of
+profit. Do not add their edges or count their displayed quantities as independent
+liquidity. The two percentages shown for the legs within each row also describe
+one paired opportunity, not a separate return on each leg.
+
+The net figures differ because the detector applies side-dependent fees: the
+stored net edges are approximately **0.0075395 per pair for LONG** and
+**0.0078610 per pair for SHORT**, rounded by the dashboard to 0.75% and 0.79%.
+These are payout-based edges, not annualized returns or returns on committed
+capital. LONG requires buying both outcomes; covered SHORT requires inventory
+of both outcomes to sell. The
+[engine's admission guard](src/prediction_markets/application/engine.py)
+treats the complementary LONG/SHORT routes as equivalent when checking for an
+already admitted execution. The history currently displays both observations.
+
+The displayed quantity is the common top-of-book liquidity observed at detection;
+execution sizing, freshness and risk checks still apply before any order.
+
 ## A completed arbitrage
 
 The successful entry path buys complementary outcomes on two venues. The
