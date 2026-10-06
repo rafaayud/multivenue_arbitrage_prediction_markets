@@ -17,6 +17,65 @@ ports-and-adapters boundaries with venue-specific market data and execution.
 > guarantee of profit or a production-readiness claim. The application can submit
 > real orders and on-chain transactions.
 
+## Application screenshots
+
+Captured from the local Docker application on **6 October 2026**, with
+**trading disabled**. The monitor, catalog, pipeline and latency views show live
+data. The opportunity images reproduce the real persisted detections described
+below. These are observations, not executed trades or realized profit; prices,
+counts and timings describe this session only.
+
+**Opportunities (historical replay).** The two Ossoff detections at 18:43:15,
+displayed as complementary SHORT and LONG routes. The current frontend keeps
+its visible signal history in memory, so the stored records were replayed into
+a temporary capture browser. Their timestamps, prices, quantities and edges
+come from the backend history; the replay did not send signals to the trading
+engine or place orders.
+
+![Historical replay of the real Ossoff LONG and SHORT detections](docs/screenshots/opportunities-history-replay.png)
+
+**Event monitor.** Selected events, venue connections and the real-money warning.
+
+![Event monitor with connected markets and trading disabled](docs/screenshots/event-monitor.png)
+
+<details>
+<summary>Event catalog</summary>
+
+AGG discovery results with venue coverage and volumes rounded to two decimals.
+The catalog can list additional venues; only Polymarket, Predict.fun and Limitless
+can be connected for this workflow. Catalog edges are AGG observations, separate
+from the engine's fee-aware signals.
+
+![Event catalog showing venue coverage and formatted volumes](docs/screenshots/event-catalog.png)
+
+</details>
+
+<details>
+<summary>Pipeline</summary>
+
+The five processing stages, connected feeds, queue occupancy and journal progress.
+Market monitoring remains active while order execution is disabled.
+
+![Pipeline with 54 order books, 48 matched pairs and no queued work](docs/screenshots/pipeline.png)
+
+</details>
+
+<details>
+<summary>Latency</summary>
+
+The separate latency view shows percentile estimates and venue comparisons.
+Execution intervals display **No samples** because no orders were submitted in
+this session. Feed handoff measures local receipt-to-engine processing, not
+network round-trip time or an end-to-end trading latency guarantee.
+
+![Latency view with live feed measurements and no execution samples](docs/screenshots/latency.png)
+
+</details>
+
+**Feed latency detail.** The same venue comparison at a readable scale.
+
+![Local feed handoff p95 comparison for Limitless, Polymarket and Predict](docs/screenshots/feed-latency.png)
+
 ## Supported venues and API credentials
 
 **Live trading through this dashboard is currently limited to three venues:
@@ -126,6 +185,11 @@ history; these are detection records, not executed trades or realized returns.
 | --- | --- | --- | ---: | ---: |
 | **LONG** | BUY NO at 0.881 | BUY YES at 0.105 | 409.95 | 0.75% |
 | **SHORT** | SELL YES at 0.119 | SELL NO at 0.895 | 409.95 | 0.79% |
+
+The detail below reproduces those persisted observations in the dashboard
+(historical replay for the screenshot, with the original detection times).
+
+![Event opportunity history reproducing the two persisted Ossoff detections](docs/screenshots/event-opportunity-history-replay.png)
 
 **These two rows express the same cross-venue price discrepancy.** Predict's
 YES order book also supplies the NO prices: the
