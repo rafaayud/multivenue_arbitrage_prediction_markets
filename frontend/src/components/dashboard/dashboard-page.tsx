@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowRight,
   Database,
   EyeOff,
   LoaderCircle,
@@ -40,7 +41,7 @@ export function DashboardPage() {
     trading.run?.status ?? "",
   )
   const selectedShortMarketKeys = tradingActive
-    ? trading.run?.short_market_keys ?? shortMarketKeys
+    ? (trading.run?.short_market_keys ?? shortMarketKeys)
     : shortMarketKeys
   const shortSelectionLocked =
     tradingActive || trading.requestState === "loading"
@@ -124,14 +125,14 @@ export function DashboardPage() {
                 ? "Online"
                 : "Offline"
           }
-          detail={backend.error ?? "FastAPI health endpoint"}
+          detail={backend.error ?? "Control API is responding"}
           icon={Activity}
           tone={backend.health ? "positive" : "negative"}
         />
         <StatusCard
-          label="Database"
+          label="API readiness"
           value={backend.ready ? "Ready" : "Not ready"}
-          detail="PostgreSQL connectivity"
+          detail="Application readiness endpoint"
           icon={Database}
           tone={backend.ready ? "positive" : "warning"}
         />
@@ -161,10 +162,54 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent className="grid gap-3 lg:grid-cols-2">
             {regularMarkets.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground lg:col-span-2">
-                No policy event is connected. Open Event catalog and select a
-                Fed or political market available on at least two venues.
-              </p>
+              <div className="rounded-xl border border-dashed border-border bg-background/40 p-6 sm:p-8 lg:col-span-2">
+                <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
+                  <div>
+                    <RadioTower className="mb-4 size-7 text-primary" />
+                    <h3 className="text-lg font-semibold tracking-tight">
+                      Start with an event you want to follow
+                    </h3>
+                    <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                      Connect the same policy question across two or more
+                      venues. Its order books and opportunities will appear
+                      here.
+                    </p>
+                  </div>
+                  <Button asChild>
+                    <a href="/events">
+                      Explore event catalog <ArrowRight className="size-4" />
+                    </a>
+                  </Button>
+                </div>
+                <ol className="mt-7 grid gap-4 border-t border-border pt-5 sm:grid-cols-3">
+                  {[
+                    [
+                      "Find an event",
+                      "Search policy decisions and political markets.",
+                    ],
+                    [
+                      "Connect venues",
+                      "Select a group with at least two supported venues.",
+                    ],
+                    [
+                      "Follow the flow",
+                      "See live books, opportunities and pipeline activity.",
+                    ],
+                  ].map(([title, detail], index) => (
+                    <li key={title} className="flex gap-3">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                        {index + 1}
+                      </span>
+                      <div>
+                        <p className="text-xs font-medium">{title}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          {detail}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
             ) : (
               regularMarkets.map((market) => (
                 <div

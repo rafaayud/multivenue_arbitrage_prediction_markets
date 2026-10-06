@@ -5,7 +5,7 @@ export interface ArbitrageVenueMarket {
   yes_outcome_id: string
   no_outcome_id: string
   title: string | null
-  volume_usd: number | null
+  volume_usd: number | string | null
 }
 
 export interface ArbitrageCandidate {
@@ -17,7 +17,7 @@ export interface ArbitrageCandidate {
   observed_at: string
   starts_at: string | null
   ends_at: string | null
-  volume_usd: number | null
+  volume_usd: number | string | null
   liquidity_usd: number | null
   liquidity_tier: "deep" | "shallow" | null
   markets: ArbitrageVenueMarket[]

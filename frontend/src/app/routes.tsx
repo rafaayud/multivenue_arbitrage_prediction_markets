@@ -19,6 +19,7 @@ export const router = createBrowserRouter([
       { path: "/orders", element: <OrdersPage /> },
       { path: "/pnl", element: <PnlPage /> },
       { path: "/pipeline", element: <PipelineMetricsPage /> },
+      { path: "/latency", element: <PipelineMetricsPage view="latency" /> },
       { path: "/settings", element: <SettingsPage /> },
     ],
   },

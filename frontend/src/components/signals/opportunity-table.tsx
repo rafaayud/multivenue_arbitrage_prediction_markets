@@ -36,8 +36,8 @@ export function OpportunityTable({
         </div>
         <p className="mt-4 text-sm font-medium">Waiting for opportunities</p>
         <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
-          The selected WebSocket is connected to the live signal stream. New
-          two-leg opportunities will appear here.
+          Connect an event from the catalog. Matching two-leg opportunities
+          will appear here as the selected markets update.
         </p>
       </div>
     )

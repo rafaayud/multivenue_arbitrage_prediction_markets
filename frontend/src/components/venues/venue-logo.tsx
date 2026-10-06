@@ -5,7 +5,7 @@ const assets: Record<string, string> = {
 }
 
 /** Render a decorative venue logo beside a visible venue label. */
-export function VenueLogo({ venue }: { venue: string }) {
+export function VenueLogo({ venue, className = "size-5" }: { venue: string; className?: string }) {
   const normalized = venue.toLowerCase()
   const asset = assets[normalized]
   if (asset) {
@@ -14,7 +14,7 @@ export function VenueLogo({ venue }: { venue: string }) {
         src={asset}
         alt=""
         aria-hidden="true"
-        className="size-5 rounded-md object-cover"
+        className={`${className} shrink-0 rounded-md object-cover`}
       />
     )
   }
@@ -29,7 +29,7 @@ export function VenueLogo({ venue }: { venue: string }) {
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex size-5 items-center justify-center rounded-md border text-[10px] font-bold ${color}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-md border text-[10px] font-bold ${className} ${color}`}
     >
       {venue.charAt(0).toUpperCase()}
     </span>

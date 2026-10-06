@@ -73,7 +73,7 @@ function PerformanceChart({ series }: { series: PnlPoint[] }) {
   if (!series.length) {
     return (
       <div className="flex h-72 items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground">
-        No hay una serie comparable para esta vista y horizonte.
+        No comparable history is available for this view and time range.
       </div>
     )
   }
@@ -218,7 +218,7 @@ export function PnlPage() {
       <PageHeader
         eyebrow="Portfolio"
         title="Performance"
-        description="PnL contable derivado de trades y operaciones económicas; los datos de venues quedan como diagnóstico."
+        description="Track realized results, open positions and costs from the execution ledger."
       />
       <ExecutionFeedStatus />
 
@@ -230,7 +230,7 @@ export function PnlPage() {
 
       <Card className="mb-4 overflow-hidden border-primary/15 bg-gradient-to-br from-primary/[0.07] via-card to-card">
         <CardContent className="p-5 sm:p-7">
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div className="flex flex-col gap-6 2xl:flex-row 2xl:items-end 2xl:justify-between">
             <div>
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <button
@@ -271,7 +271,7 @@ export function PnlPage() {
                 {!badges.length && active && <Badge variant="positive">Complete</Badge>}
               </div>
             </div>
-            <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:min-w-[720px] xl:grid-cols-4">
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:min-w-[660px]">
               {stats.map(({ name, value, Icon }) => (
                 <div key={name} className="rounded-xl border border-border/80 bg-background/55 p-4 backdrop-blur">
                   <div className="flex items-center justify-between text-xs text-muted-foreground">

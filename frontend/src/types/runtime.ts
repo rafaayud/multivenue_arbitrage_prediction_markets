@@ -12,6 +12,18 @@ export interface RegularMonitoredMarket {
 
 export interface RuntimeState {
   running: boolean
+  input_buffer_size?: number
+  output_buffer_size?: number
+  dropped_order_books?: number
+  books?: number
+  matched_pairs?: number
+  orders?: number
+  active_executions?: number
+  market_worker_mode?: string
+  safety_halted?: boolean
+  journal_sequence?: number
+  durable_sequence?: number
+  projection_sequence?: number
   trading_enabled?: boolean
   signal_settings?: SignalSettings
   regular_markets?: RegularMonitoredMarket[]

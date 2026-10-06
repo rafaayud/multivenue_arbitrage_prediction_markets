@@ -66,7 +66,6 @@ export function useArbitrageCandidates(
           ...current,
           loading: false,
           error: reason instanceof Error ? reason.message : "AGG candidates failed",
-          updatedAt: new Date(),
         }))
       }
     }
