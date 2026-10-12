@@ -21,7 +21,7 @@ export interface ArbitrageSignal {
   generatedAt: string
 }
 
-/** A validated two-leg opportunity received from the backend signal stream. */
+/** A validated two-leg opportunity from persisted history or the live stream. */
 export interface ArbitrageOpportunity {
   id: string
   monitorType: MonitorType
@@ -146,4 +146,34 @@ export function parseArbitrageOpportunity(
     signals: [left, right],
     generatedAt,
   }
+}
+
+/** Normalize a persisted detection using the same identity as its live signal. */
+export function parseStoredArbitrageOpportunity(value: unknown): ArbitrageOpportunity {
+  if (!isRecord(value)) {
+    throw new Error("stored opportunity must be an object")
+  }
+  const direction = value.side
+  const strategy = direction === "buy" ? "long-arbitrage" : "short-arbitrage"
+  const contracts = [value.left_contract_id, value.right_contract_id]
+  const prices = [value.left_price, value.right_price]
+  return parseArbitrageOpportunity({
+    type: "arbitrage_signal_pair",
+    monitor_type: value.monitor_type,
+    monitor_key: value.monitor_key,
+    market_label: value.market_label ?? value.underlying ?? `Saved event: ${value.monitor_key}`,
+    underlying: value.underlying,
+    interval_seconds: value.interval_seconds,
+    signals: contracts.map((contract, index) => ({
+      contract_id: contract,
+      venue_id: String(contract).split(":")[0]!.toUpperCase(),
+      direction,
+      quantity: value.quantity,
+      limit_price: prices[index],
+      fair_probability: 1 - parseDecimal(prices[1 - index], "opposite price"),
+      edge: value.net_edge,
+      strategy_id: strategy,
+      generated_at: value.detected_at,
+    })),
+  })
 }

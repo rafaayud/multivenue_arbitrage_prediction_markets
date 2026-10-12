@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from threading import Event
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 from fastapi.testclient import TestClient
 import pytest
@@ -78,6 +78,28 @@ from prediction_markets.domain.trading.entities import ArbitrageExecutionJournal
 
 
 _NOW = datetime(2026, 7, 29, 18, 30, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("label", ["Will the regular event happen?", None])
+def test_opportunity_history_keeps_titles_and_original_detection_time(monkeypatch, label):
+    """Read named detections and legacy rows without projected title metadata."""
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [(
+        "opportunity-1", 49, "regular", "regular:event", None, None, "buy",
+        "polymarket:event:yes", "predict:1:no", Decimal("0.4"), Decimal("0.5"),
+        Decimal("2"), Decimal("0.1"), Decimal("0.09"), Decimal("0.01"),
+        Decimal("0.02"), 100, _NOW, label,
+    )]
+    connect = MagicMock()
+    connect.return_value.__enter__.return_value = connection
+    monkeypatch.setattr("prediction_markets.api.trading.activity.psycopg.connect", connect)
+    history = TradingActivityReader("unused").opportunities(limit=200)
+    assert len(history) == 1
+    assert history[0].market_label == label
+    assert history[0].detected_at == _NOW
+    assert history[0].net_edge == Decimal("0.09")
+
+
 _ORDER = OrderOut(
     status="filled",
     contract_id="polymarket:condition:token",

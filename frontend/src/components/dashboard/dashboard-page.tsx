@@ -294,12 +294,13 @@ export function DashboardPage() {
             <div>
               <CardTitle>Event opportunity history</CardTitle>
               <CardDescription>
-                Two-leg opportunities from explicitly selected policy markets.
+                Saved detections and live signals from selected events. Past signals may no longer be tradable.
               </CardDescription>
             </div>
             <Badge variant="outline">{opportunities.length} observed</Badge>
           </CardHeader>
           <CardContent className="px-2 sm:px-5">
+            {stream.historyError && <p role="alert" className="mb-3 text-xs text-amber-600 dark:text-amber-300">{stream.historyError}</p>}
             <OpportunityTable opportunities={opportunities} />
           </CardContent>
         </Card>
@@ -311,13 +312,13 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
-              <span className="text-xs text-muted-foreground">Messages</span>
+              <span className="text-xs text-muted-foreground">Live messages this session</span>
               <span className="numeric text-xs font-semibold">
                 {stream.signalCount}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">Last update</span>
+              <span className="text-xs text-muted-foreground">Last live message</span>
               <span className="numeric text-xs font-medium">
                 {formatTimestamp(stream.lastReceivedAt)}
               </span>

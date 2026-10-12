@@ -1425,6 +1425,11 @@ def _summary(event: object) -> dict[str, object]:
     if isinstance(event, ArbitrageOpportunityFound):
         return {
             "opportunity_id": event.id,
+            "market_label": (
+                max((market.title for market in event.cycle.markets), key=len)
+                if isinstance(event.cycle, RegularCandidate)
+                else str(event.cycle.underlying)
+            ),
             "side": event.opportunity.side.value,
             "net_edge": str(event.opportunity.net_edge),
         }

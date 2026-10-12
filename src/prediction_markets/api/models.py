@@ -215,6 +215,7 @@ class ArbitrageOpportunityOut(BaseModel):
     total_fees: Decimal
     skew_ns: int
     detected_at: datetime
+    market_label: str | None = None
 
 
 class TradingPreflightOut(BaseModel):

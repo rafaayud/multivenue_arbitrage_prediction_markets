@@ -5,6 +5,7 @@ import {
   ArbitrageStreamProvider,
   useArbitrageStream,
 } from "@/features/arbitrage/arbitrage-stream-provider"
+import { apiClient } from "@/lib/api-client"
 import type {
   ArbitrageOpportunity,
   ConnectionStatus,
@@ -27,6 +28,7 @@ const socketState = vi.hoisted(() => ({
 
 vi.mock("@/lib/api-client", () => ({
   apiClient: {
+    arbitrageOpportunities: vi.fn(async () => [] as ArbitrageOpportunity[]),
     runtimeStatus: vi.fn(async () => ({
       running: true,
       regular_markets: socketState.regularMonitorKeys.map((monitor_key) => ({
@@ -103,6 +105,7 @@ function Probe() {
     <div>
       <span>{stream.connectionStatus}</span>
       <span>{stream.signalCount} received</span>
+      {stream.historyError && <span role="alert">{stream.historyError}</span>}
       {stream.opportunities.map((item) => (
         <span key={item.id}>{item.marketLabel}</span>
       ))}
@@ -114,6 +117,7 @@ describe("ArbitrageStreamProvider", () => {
   beforeEach(() => {
     socketState.sockets.length = 0
     socketState.regularMonitorKeys.length = 0
+    vi.mocked(apiClient.arbitrageOpportunities).mockReset().mockResolvedValue([])
   })
 
   test("opens sockets only for explicitly selected regular events", async () => {
@@ -175,5 +179,48 @@ describe("ArbitrageStreamProvider", () => {
 
     expect(screen.getByText("Another route")).toBeInTheDocument()
     expect(socketState.sockets[0]!.stop).not.toHaveBeenCalled()
+  })
+
+  test("restores deselected markets after reload without counting history as live messages", async () => {
+    vi.mocked(apiClient.arbitrageOpportunities).mockResolvedValue([
+      opportunity("regular:previously-selected"),
+    ])
+    const view = render(<ArbitrageStreamProvider><Probe /></ArbitrageStreamProvider>)
+    expect(await screen.findByText("Fed raises rates")).toBeInTheDocument()
+    expect(screen.getByText("0 received")).toBeInTheDocument()
+    expect(socketState.sockets).toHaveLength(0)
+    view.unmount()
+    render(<ArbitrageStreamProvider><Probe /></ArbitrageStreamProvider>)
+    expect(await screen.findByText("Fed raises rates")).toBeInTheDocument()
+  })
+
+  test("merges delayed history with live signals without duplicates or losing newer signals", async () => {
+    let resolveHistory!: (items: ArbitrageOpportunity[]) => void
+    vi.mocked(apiClient.arbitrageOpportunities).mockReturnValue(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    socketState.regularMonitorKeys.push("regular:fed-rate-hike")
+    render(<ArbitrageStreamProvider><Probe /></ArbitrageStreamProvider>)
+    await waitFor(() => expect(socketState.sockets).toHaveLength(1))
+    const older = opportunity("regular:fed-rate-hike")
+    const newer = { ...older, id: "newer", marketLabel: "New signal", generatedAt: "2026-09-10T13:00:00Z" }
+    act(() => {
+      socketState.sockets[0]!.handlers.onMessage(older)
+      socketState.sockets[0]!.handlers.onMessage(newer)
+    })
+    await act(async () => resolveHistory([older]))
+    expect(screen.getAllByText("Fed raises rates")).toHaveLength(1)
+    expect(screen.getByText("New signal")).toBeInTheDocument()
+    expect(screen.getByText("2 received")).toBeInTheDocument()
+  })
+
+  test("reports history failures while keeping live delivery available", async () => {
+    vi.mocked(apiClient.arbitrageOpportunities).mockRejectedValue(new Error("unavailable"))
+    socketState.regularMonitorKeys.push("regular:fed-rate-hike")
+    render(<ArbitrageStreamProvider><Probe /></ArbitrageStreamProvider>)
+    expect(await screen.findByRole("alert")).toHaveTextContent("history could not be loaded")
+    await waitFor(() => expect(socketState.sockets).toHaveLength(1))
+    act(() => socketState.sockets[0]!.handlers.onMessage(opportunity("regular:fed-rate-hike")))
+    expect(screen.getByText("Fed raises rates")).toBeInTheDocument()
   })
 })

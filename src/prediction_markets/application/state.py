@@ -496,7 +496,7 @@ class EventDispatcher:
         self.state = state
         self._subscriber_capacity = subscriber_capacity
         self._subscribers: dict[
-            MonitoredMarket,
+            str,
             set[asyncio.Queue[tuple[Signal, Signal]]],
         ] = {}
 
@@ -505,7 +505,7 @@ class EventDispatcher:
         self.state.apply(event)
         if not replay and isinstance(event, ArbitrageOpportunityFound):
             signals = opportunity_to_signals(event)
-            for queue in tuple(self._subscribers.get(event.cycle, ())):
+            for queue in tuple(self._subscribers.get(monitored_market_key(event.cycle), ())):
                 if queue.full():
                     queue.get_nowait()
                 queue.put_nowait(signals)
@@ -514,11 +514,12 @@ class EventDispatcher:
         self,
         cycle: MonitoredMarket,
     ) -> AsyncIterator[tuple[Signal, Signal]]:
-        """Yield signal pairs for one selection until the consumer closes."""
+        """Yield signals by stable selection identity across metadata refreshes."""
         queue: asyncio.Queue[tuple[Signal, Signal]] = asyncio.Queue(
             self._subscriber_capacity,
         )
-        subscribers = self._subscribers.setdefault(cycle, set())
+        key = monitored_market_key(cycle)
+        subscribers = self._subscribers.setdefault(key, set())
         subscribers.add(queue)
         try:
             while True:
@@ -526,7 +527,7 @@ class EventDispatcher:
         finally:
             subscribers.discard(queue)
             if not subscribers:
-                self._subscribers.pop(cycle, None)
+                self._subscribers.pop(key, None)
 
 
 def opportunity_to_signals(

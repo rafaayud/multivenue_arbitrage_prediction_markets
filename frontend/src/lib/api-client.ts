@@ -1,4 +1,5 @@
-import { API_BASE_URL } from "@/lib/config"
+import { API_BASE_URL, MAX_RECENT_OPPORTUNITIES } from "@/lib/config"
+import { parseStoredArbitrageOpportunity } from "@/types/arbitrage"
 import type {
   MessageResponse,
 } from "@/types/api"
@@ -81,6 +82,14 @@ export const apiClient = {
 
   runtimeStatus: (signal?: AbortSignal) =>
     request<RuntimeState>("/runtime/status", { signal }),
+
+  arbitrageOpportunities: async (signal?: AbortSignal) => {
+    const rows = await request<unknown[]>(
+      `/arbitrage-opportunities?limit=${MAX_RECENT_OPPORTUNITIES}`,
+      { signal },
+    )
+    return rows.map(parseStoredArbitrageOpportunity)
+  },
 
   updateSignalSettings: (settings: SignalSettings) =>
     request<RuntimeState>("/runtime/signal-settings", {

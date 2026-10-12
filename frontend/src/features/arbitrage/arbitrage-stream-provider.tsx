@@ -9,6 +9,7 @@ import {
 } from "react"
 
 import { apiClient } from "@/lib/api-client"
+import { MAX_RECENT_OPPORTUNITIES } from "@/lib/config"
 import {
   createArbitrageSocket,
   prependOpportunity,
@@ -21,6 +22,7 @@ import type {
 interface ArbitrageStreamContextValue {
   connectionStatus: ConnectionStatus
   connectionError: string | null
+  historyError: string | null
   opportunities: ArbitrageOpportunity[]
   signalCount: number
   lastReceivedAt: Date | null
@@ -29,7 +31,7 @@ interface ArbitrageStreamContextValue {
 const ArbitrageStreamContext =
   createContext<ArbitrageStreamContextValue | null>(null)
 
-/** Own selected regular-event sockets plus their recent opportunities. */
+/** Combine persisted event history with selected events' live signal sockets. */
 export function ArbitrageStreamProvider({
   children,
 }: {
@@ -39,6 +41,7 @@ export function ArbitrageStreamProvider({
     Record<string, ConnectionStatus>
   >({})
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([])
   const [signalCount, setSignalCount] = useState(0)
   const [lastReceivedAt, setLastReceivedAt] = useState<Date | null>(null)
@@ -48,6 +51,38 @@ export function ArbitrageStreamProvider({
   )
 
   const monitorKeys = regularMonitorKeys
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    const refreshHistory = async () => {
+      try {
+        const history = await apiClient.arbitrageOpportunities(controller.signal)
+        if (controller.signal.aborted) return
+        setOpportunities((current) =>
+          [...new Map([...history, ...current]
+            .filter((item) => item.monitorType === "regular")
+            .map((item) => [item.id, item])).values()]
+            .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt))
+            .slice(0, MAX_RECENT_OPPORTUNITIES),
+        )
+        setHistoryError(null)
+      } catch {
+        if (!controller.signal.aborted) {
+          setHistoryError("Saved opportunity history could not be loaded. Retrying automatically.")
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          timer = setTimeout(refreshHistory, 10_000)
+        }
+      }
+    }
+    void refreshHistory()
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
+  }, [])
 
   useEffect(() => {
     const refreshMonitoredMarkets = async () => {
@@ -131,6 +166,7 @@ export function ArbitrageStreamProvider({
     () => ({
       connectionStatus,
       connectionError,
+      historyError,
       opportunities,
       signalCount,
       lastReceivedAt,
@@ -138,6 +174,7 @@ export function ArbitrageStreamProvider({
     [
       connectionStatus,
       connectionError,
+      historyError,
       opportunities,
       signalCount,
       lastReceivedAt,

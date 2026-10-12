@@ -114,15 +114,16 @@ class TradingActivityReader:
         with psycopg.connect(self._dsn, connect_timeout=5) as connection:
             rows = connection.execute(
                 """
-                SELECT opportunity_id, journal_sequence, monitor_type, monitor_key,
+                SELECT opportunity_id, o.journal_sequence, monitor_type, monitor_key,
                        underlying, interval_seconds, side, left_contract_id,
                        right_contract_id, left_price, right_price, quantity,
                        gross_edge, net_edge, fee_per_contract, total_fees, skew_ns,
-                       detected_at
-                FROM arbitrage_opportunities
+                       detected_at, e.summary ->> 'market_label'
+                FROM arbitrage_opportunities o
+                LEFT JOIN projected_events e USING (journal_sequence)
                 """
                 + where
-                + " ORDER BY journal_sequence DESC LIMIT %s",
+                + " ORDER BY o.journal_sequence DESC LIMIT %s",
                 tuple(params),
             ).fetchall()
         return [

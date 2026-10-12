@@ -26,9 +26,12 @@ below. These are observations, not executed trades or realized profit; prices,
 counts and timings describe this session only.
 
 **Opportunities (historical replay).** The two Ossoff detections at 18:43:15,
-displayed as complementary SHORT and LONG routes. The current frontend keeps
-its visible signal history in memory, so the stored records were replayed into
-a temporary capture browser. Their timestamps, prices, quantities and edges
+displayed as complementary SHORT and LONG routes. At capture time the frontend
+kept its visible history in memory, so the stored records were replayed into
+a temporary capture browser. The dashboard now loads the latest 200 persisted
+detections on opening and refreshes them every 10 seconds alongside live signals,
+including previously selected events. Past detections retain their original times
+and do not imply that the opportunity is still tradable. Screenshot prices, quantities and edges
 come from the backend history; the replay did not send signals to the trading
 engine or place orders.
 

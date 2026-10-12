@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 
-import { parseArbitrageOpportunity } from "@/types/arbitrage"
+import { parseArbitrageOpportunity, parseStoredArbitrageOpportunity } from "@/types/arbitrage"
 
 function signalPair(firstGeneratedAt: string, secondGeneratedAt: string) {
   return {
@@ -85,5 +85,24 @@ describe("parseArbitrageOpportunity", () => {
         signals: [],
       }),
     ).toThrow("exactly two legs")
+  })
+
+  test.each(["buy", "sell"])("deduplicates saved %s detections against the same live pair", (side) => {
+    const timestamp = "2026-10-12T10:37:33.768227Z"
+    const payload = signalPair(timestamp, timestamp)
+    const signals = payload.signals.map((signal) => ({
+      ...signal, direction: side,
+      strategy_id: side === "buy" ? "long-arbitrage" : "short-arbitrage",
+    }))
+    const live = parseArbitrageOpportunity({ ...payload, signals: [...signals].reverse() })
+    const saved = parseStoredArbitrageOpportunity({
+      monitor_type: "cycle", monitor_key: "cycle:BTC:300", underlying: "BTC", interval_seconds: 300,
+      side, left_contract_id: "poly:yes", right_contract_id: "limitless:no",
+      left_price: "0.40", right_price: "0.50", quantity: "2", net_edge: "0.09", detected_at: timestamp,
+    })
+    expect(saved.id).toBe(live.id)
+    expect(saved.generatedAt).toBe(timestamp)
+    expect(saved.signals[0].edge).toBe(0.09)
+    expect(saved.side).toBe(side === "buy" ? "LONG" : "SHORT")
   })
 })

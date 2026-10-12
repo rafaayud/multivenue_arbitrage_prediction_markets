@@ -1,6 +1,7 @@
 """Verify deterministic planning and two-leg execution state transitions."""
 
 from collections import deque
+import asyncio
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -270,6 +271,38 @@ def _regular_candidate(
             ),
         ),
     )
+
+
+def test_signal_subscription_survives_market_metadata_refresh() -> None:
+    """Deliver live signals by market identity after titles or ordering change."""
+    async def check() -> None:
+        left = _contract("left", VenueID("POLYMARKET"), "yes")
+        right = _contract("right", VenueID("PREDICT"), "no")
+        candidate = _regular_candidate(left, right)
+        refreshed = RegularCandidate(tuple(
+            replace(market, title=f"Updated {market.title}")
+            for market in reversed(candidate.markets)
+        ))
+        opportunity = LongArbitrageDetectionService().detect(
+            left.id, right.id, _book(left, "0.4", "2"), _book(right, "0.5", "2"),
+        )
+        assert opportunity is not None
+        dispatcher = EventDispatcher(TradingState())
+        stream = dispatcher.stream_signal_pairs(candidate)
+        pending = asyncio.create_task(anext(stream))
+        await asyncio.sleep(0)
+        dispatcher.dispatch(ArbitrageOpportunityFound(
+            "refreshed", refreshed,
+            MatchedContractPair(left, right, Timestamp.now()), opportunity,
+        ))
+        try:
+            signals = await asyncio.wait_for(pending, 1)
+            assert {signal.contract_id for signal in signals} == {left.id, right.id}
+        finally:
+            await stream.aclose()
+        assert not dispatcher._subscribers
+
+    asyncio.run(check())
 
 
 def test_trading_state_keeps_pair_index_consistent_with_match_events() -> None:

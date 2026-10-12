@@ -86,7 +86,7 @@ export function SignalsPage() {
               </Badge>
             </div>
             <CardDescription>
-              Stored in memory up to the latest 200 opportunities.
+              The latest 200 saved detections and live signals. Past signals may no longer be tradable.
             </CardDescription>
           </div>
 
@@ -164,6 +164,7 @@ export function SignalsPage() {
               </p>
             )}
           </div>
+          {stream.historyError && <p role="alert" className="mb-3 text-xs text-amber-600 dark:text-amber-300">{stream.historyError}</p>}
           <OpportunityTable opportunities={opportunities} />
         </CardContent>
       </Card>
