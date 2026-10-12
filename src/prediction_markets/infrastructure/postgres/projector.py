@@ -58,6 +58,7 @@ from prediction_markets.application.events import (
 from prediction_markets.application.markets.models import (
     MarketCycle,
     MonitoredMarket,
+    RegularCandidate,
     monitored_market_key,
 )
 from prediction_markets.domain.alerting.entities import NotificationSnapshot

@@ -24,7 +24,7 @@ const DEFAULT_SETTINGS: TradingRunSettings = {
   polymarket_max_notional: 1,
   limitless_max_notional: 1,
   predict_max_notional: 1,
-  predict_limit_slippage_ticks: 2,
+  predict_limit_slippage_ticks: 0,
   predict_use_edge_budget: false,
   min_net_edge: 0,
   cost_buffer: 0,
@@ -64,10 +64,6 @@ export function TradingControl({
   const [predictMax, setPredictMax] = useState(
     String(DEFAULT_SETTINGS.predict_max_notional),
   )
-  const [predictSlippageTicks, setPredictSlippageTicks] = useState(
-    String(DEFAULT_SETTINGS.predict_limit_slippage_ticks),
-  )
-  const [predictUseEdgeBudget, setPredictUseEdgeBudget] = useState(false)
   const [minNetEdge, setMinNetEdge] = useState<string | null>(null)
   const [costBuffer, setCostBuffer] = useState<string | null>(null)
   const [maxRecoveryLoss, setMaxRecoveryLoss] = useState(
@@ -87,8 +83,8 @@ export function TradingControl({
     polymarket_max_notional: Number(polymarketMax),
     limitless_max_notional: Number(limitlessMax),
     predict_max_notional: Number(predictMax),
-    predict_limit_slippage_ticks: Number(predictSlippageTicks),
-    predict_use_edge_budget: predictUseEdgeBudget,
+    predict_limit_slippage_ticks: DEFAULT_SETTINGS.predict_limit_slippage_ticks,
+    predict_use_edge_budget: DEFAULT_SETTINGS.predict_use_edge_budget,
     min_net_edge: Number(minNetEdgeValue),
     cost_buffer: Number(costBufferValue),
     max_recovery_loss: Number(maxRecoveryLoss),
@@ -107,8 +103,6 @@ export function TradingControl({
     settings.limitless_max_notional <= 10 &&
     settings.predict_max_notional >= 1 &&
     settings.predict_max_notional <= 10 &&
-    Number.isInteger(settings.predict_limit_slippage_ticks) &&
-    settings.predict_limit_slippage_ticks >= 0 &&
     minNetEdgeValue.trim() !== "" &&
     settings.min_net_edge >= 0 &&
     settings.min_net_edge <= 0.2 &&
@@ -239,7 +233,7 @@ export function TradingControl({
                   disabled.
                 </p>
               </section>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="block text-xs font-medium">
                   Arbitrages before stop
                   <input
@@ -303,20 +297,6 @@ export function TradingControl({
                   />
                 </label>
                 <label className="block text-xs font-medium">
-                  Predict slippage (ticks)
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={predictSlippageTicks}
-                    disabled={predictUseEdgeBudget}
-                    onChange={(event) =>
-                      setPredictSlippageTicks(event.target.value)
-                    }
-                    className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                </label>
-                <label className="block text-xs font-medium">
                   Recovery max loss (USD)
                   <input
                     type="number"
@@ -362,23 +342,6 @@ export function TradingControl({
                   net edge. These values apply when you confirm this trading run.
                 </p>
               </fieldset>
-              <label className="mt-3 flex items-center gap-2 text-xs font-medium">
-                <input
-                  type="checkbox"
-                  checked={predictUseEdgeBudget}
-                  onChange={(event) =>
-                    setPredictUseEdgeBudget(event.target.checked)
-                  }
-                />
-                Predict: use available edge (experimental)
-              </label>
-              {predictUseEdgeBudget && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  Replaces fixed ticks. Keeps the original quantity and the
-                  other venue limit, reserving your minimum edge and cost buffer
-                  after fees. A one-leg fill can still cause a loss.
-                </p>
-              )}
               <p className="mt-2 text-[11px] text-muted-foreground">
                 Minimum accepted budget: 1 unit of each venue's quote currency
                 (USDC or USDT). The actual spend can be lower than the selected

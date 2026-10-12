@@ -70,7 +70,7 @@ describe("TradingControl", () => {
       polymarket_max_notional: 1,
       limitless_max_notional: 1,
       predict_max_notional: 1,
-      predict_limit_slippage_ticks: 2,
+      predict_limit_slippage_ticks: 0,
       predict_use_edge_budget: false,
       min_net_edge: 0.015,
       cost_buffer: 0.005,
@@ -85,7 +85,7 @@ describe("TradingControl", () => {
     render(
       <TradingControl
         controller={value}
-        shortMarketKeys={["cycle:BTC:3600"]}
+        shortMarketKeys={["regular:selected"]}
       />,
     )
 
@@ -101,8 +101,6 @@ describe("TradingControl", () => {
     await user.type(screen.getByLabelText("Limitless max (USDC)"), "10")
     await user.clear(screen.getByLabelText("Predict max (USDT)"))
     await user.type(screen.getByLabelText("Predict max (USDT)"), "10")
-    await user.clear(screen.getByLabelText("Predict slippage (ticks)"))
-    await user.type(screen.getByLabelText("Predict slippage (ticks)"), "0")
     await user.clear(screen.getByLabelText("Recovery max loss (USD)"))
     await user.type(screen.getByLabelText("Recovery max loss (USD)"), "0.5")
     await user.clear(screen.getByLabelText("Minimum net edge (USD/contract)"))
@@ -133,27 +131,19 @@ describe("TradingControl", () => {
       min_net_edge: 0.015,
       cost_buffer: 0.005,
       max_recovery_loss: 0.5,
-      short_market_keys: ["cycle:BTC:3600"],
+      short_market_keys: ["regular:selected"],
     })
   })
 
-  test("edge-budget pricing is opt-in and replaces the fixed tick control", async () => {
+  test("starts without Predict slippage or experimental pricing controls", async () => {
     const user = userEvent.setup()
     const value = controller(null)
     render(<TradingControl controller={value} />)
     await user.click(screen.getByRole("button", { name: /enable trading/i }))
-    const option = screen.getByRole("checkbox", {
+    expect(screen.queryByLabelText("Predict slippage (ticks)")).not.toBeInTheDocument()
+    expect(screen.queryByRole("checkbox", {
       name: /Predict: use available edge/i,
-    })
-    expect(option).not.toBeChecked()
-    await user.click(option)
-    expect(screen.getByLabelText("Predict slippage (ticks)")).toBeDisabled()
-    expect(
-      screen.getByText(/one-leg fill can still cause a loss/i),
-    ).toBeVisible()
-    await user.click(option)
-    expect(screen.getByLabelText("Predict slippage (ticks)")).toBeEnabled()
-    await user.click(option)
+    })).not.toBeInTheDocument()
     await user.type(screen.getByLabelText("Trading API key"), "secret")
     await user.click(
       screen.getByRole("checkbox", {
@@ -166,8 +156,8 @@ describe("TradingControl", () => {
     expect(value.enable).toHaveBeenCalledWith(
       "secret",
       expect.objectContaining({
-        predict_use_edge_budget: true,
-        predict_limit_slippage_ticks: 2,
+        predict_use_edge_budget: false,
+        predict_limit_slippage_ticks: 0,
         max_arbitrages: 1,
       }),
     )

@@ -1,5 +1,6 @@
 """Verify PostgreSQL projection remains behind journal durability."""
 
+import json
 from decimal import Decimal
 import time
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from prediction_markets.application.events import (
+    ArbitrageOpportunityFound,
     ExecutionUpdated,
     MarketMatchesUpdated,
     TradeRecorded,
@@ -292,7 +294,7 @@ def test_projector_waits_for_fdatasync_cursor(tmp_path) -> None:
 
 
 def test_regular_candidate_projects_without_cycle_metadata() -> None:
-    """Use the candidate key when no underlying or interval exists."""
+    """Persist selected-event matches and named opportunities without cycle metadata."""
     closes_at = Timestamp.from_iso("2026-08-07T12:00:00Z")
     candidate = RegularCandidate(
         tuple(
@@ -329,6 +331,31 @@ def test_regular_candidate_projects_without_cycle_metadata() -> None:
         "interval_seconds": None,
         "pairs": 0,
     }
+
+    opportunity = SimpleNamespace(
+        left_contract_id=ContractID("left:yes"),
+        right_contract_id=ContractID("right:no"),
+        side=OrderSide.BUY,
+        left_level=SimpleNamespace(price=Price(Decimal("0.4"))),
+        right_level=SimpleNamespace(price=Price(Decimal("0.5"))),
+        quantity=Quantity(Decimal("5")),
+        gross_edge=Decimal("0.1"),
+        net_edge=Decimal("0.09"),
+        fee_per_contract=Decimal("0.01"),
+        total_fees=Decimal("0.05"),
+        skew_ns=0,
+        detected_at=Timestamp.now(),
+    )
+    detected = ArbitrageOpportunityFound(
+        "regular-opportunity", candidate, SimpleNamespace(), opportunity,
+    )
+    cursor = _Cursor([], [])
+
+    _project_entry(cursor, JournalEntry(8, Timestamp.now(), detected, b""))
+
+    assert json.loads(cursor.executions[0][1][-1])["market_label"] == "Regular market"
+    assert "INSERT INTO arbitrage_opportunities" in cursor.executions[1][0]
+    assert cursor.executions[1][1][:3] == ("regular-opportunity", 8, "regular")
 
 
 def test_match_projection_retains_binary_contract_complements() -> None:
