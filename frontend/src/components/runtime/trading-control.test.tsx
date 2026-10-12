@@ -79,7 +79,7 @@ describe("TradingControl", () => {
     })
   })
 
-  test("passes the selected execution count and venue budgets", async () => {
+  test("passes the selected execution count, venue budgets and profit requirements", async () => {
     const user = userEvent.setup()
     const value = controller(null)
     render(
@@ -105,6 +105,10 @@ describe("TradingControl", () => {
     await user.type(screen.getByLabelText("Predict slippage (ticks)"), "0")
     await user.clear(screen.getByLabelText("Recovery max loss (USD)"))
     await user.type(screen.getByLabelText("Recovery max loss (USD)"), "0.5")
+    await user.clear(screen.getByLabelText("Minimum net edge (USD/contract)"))
+    await user.type(screen.getByLabelText("Minimum net edge (USD/contract)"), "0.015")
+    await user.clear(screen.getByLabelText("Cost buffer (USD/contract)"))
+    await user.type(screen.getByLabelText("Cost buffer (USD/contract)"), "0.005")
     await user.type(screen.getByLabelText("Trading API key"), "secret")
     await user.click(
       screen.getByRole("checkbox", {
@@ -126,8 +130,8 @@ describe("TradingControl", () => {
       predict_max_notional: 10,
       predict_limit_slippage_ticks: 0,
       predict_use_edge_budget: false,
-      min_net_edge: 0,
-      cost_buffer: 0,
+      min_net_edge: 0.015,
+      cost_buffer: 0.005,
       max_recovery_loss: 0.5,
       short_market_keys: ["cycle:BTC:3600"],
     })
@@ -167,6 +171,47 @@ describe("TradingControl", () => {
         max_arbitrages: 1,
       }),
     )
+  })
+
+  test.each([
+    ["Minimum net edge (USD/contract)", ""],
+    ["Minimum net edge (USD/contract)", "-0.01"],
+    ["Minimum net edge (USD/contract)", "0.201"],
+    ["Cost buffer (USD/contract)", ""],
+    ["Cost buffer (USD/contract)", "-0.01"],
+    ["Cost buffer (USD/contract)", "0.051"],
+  ])("blocks both start actions for invalid %s: %s", async (label, invalid) => {
+    const user = userEvent.setup()
+    const value = controller(null)
+    render(<TradingControl controller={value} />)
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    await user.type(screen.getByLabelText("Trading API key"), "secret")
+    await user.click(screen.getByRole("checkbox", { name: /I understand this uses real funds/ }))
+    expect(screen.getByRole("button", { name: "Enable live trading" })).toBeEnabled()
+    await user.clear(screen.getByLabelText(label))
+    if (invalid) await user.type(screen.getByLabelText(label), invalid)
+    expect(screen.getByRole("button", { name: "Enable live trading" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Enable despite degraded" })).toBeDisabled()
+    expect(value.enable).not.toHaveBeenCalled()
+  })
+
+  test("uses refreshed thresholds without overwriting edits and discards cancelled changes", async () => {
+    const user = userEvent.setup()
+    const value = controller(null)
+    const view = render(<TradingControl controller={value} />)
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    view.rerender(<TradingControl controller={value} signalSettings={{ min_net_edge: 0.01, cost_buffer: 0.002 }} />)
+    expect(screen.getByLabelText("Minimum net edge (USD/contract)")).toHaveValue(0.01)
+    expect(screen.getByLabelText("Cost buffer (USD/contract)")).toHaveValue(0.002)
+    await user.clear(screen.getByLabelText("Minimum net edge (USD/contract)"))
+    await user.type(screen.getByLabelText("Minimum net edge (USD/contract)"), "0.02")
+    view.rerender(<TradingControl controller={value} signalSettings={{ min_net_edge: 0.01, cost_buffer: 0.003 }} />)
+    expect(screen.getByLabelText("Minimum net edge (USD/contract)")).toHaveValue(0.02)
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(value.enable).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    expect(screen.getByLabelText("Minimum net edge (USD/contract)")).toHaveValue(0.01)
+    expect(screen.getByLabelText("Cost buffer (USD/contract)")).toHaveValue(0.003)
   })
 
   test("can explicitly start while venue health is degraded", async () => {

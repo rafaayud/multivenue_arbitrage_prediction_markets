@@ -68,6 +68,8 @@ export function TradingControl({
     String(DEFAULT_SETTINGS.predict_limit_slippage_ticks),
   )
   const [predictUseEdgeBudget, setPredictUseEdgeBudget] = useState(false)
+  const [minNetEdge, setMinNetEdge] = useState<string | null>(null)
+  const [costBuffer, setCostBuffer] = useState<string | null>(null)
   const [maxRecoveryLoss, setMaxRecoveryLoss] = useState(
     String(DEFAULT_SETTINGS.max_recovery_loss),
   )
@@ -77,6 +79,8 @@ export function TradingControl({
     controller.run?.status === "running" ||
     controller.run?.status === "stopping"
   const error = controller.error ?? controller.run?.error
+  const minNetEdgeValue = minNetEdge ?? String(signalSettings.min_net_edge)
+  const costBufferValue = costBuffer ?? String(signalSettings.cost_buffer)
   const settings = {
     max_arbitrages: Number(maxArbitrages),
     max_concurrent_arbitrages: Number(maxConcurrentArbitrages),
@@ -85,8 +89,8 @@ export function TradingControl({
     predict_max_notional: Number(predictMax),
     predict_limit_slippage_ticks: Number(predictSlippageTicks),
     predict_use_edge_budget: predictUseEdgeBudget,
-    min_net_edge: signalSettings.min_net_edge,
-    cost_buffer: signalSettings.cost_buffer,
+    min_net_edge: Number(minNetEdgeValue),
+    cost_buffer: Number(costBufferValue),
     max_recovery_loss: Number(maxRecoveryLoss),
     short_market_keys: shortMarketKeys,
   }
@@ -105,6 +109,12 @@ export function TradingControl({
     settings.predict_max_notional <= 10 &&
     Number.isInteger(settings.predict_limit_slippage_ticks) &&
     settings.predict_limit_slippage_ticks >= 0 &&
+    minNetEdgeValue.trim() !== "" &&
+    settings.min_net_edge >= 0 &&
+    settings.min_net_edge <= 0.2 &&
+    costBufferValue.trim() !== "" &&
+    settings.cost_buffer >= 0 &&
+    settings.cost_buffer <= 0.05 &&
     settings.max_recovery_loss >= 0 &&
     settings.max_recovery_loss <= 8
 
@@ -161,9 +171,13 @@ export function TradingControl({
           </AlertDialog>
         ) : (
           <AlertDialog
-            onOpenChange={() => {
+            onOpenChange={(open) => {
               setTradingKey("")
               setRiskAcknowledged(false)
+              if (open) {
+                setMinNetEdge(null)
+                setCostBuffer(null)
+              }
             }}
           >
             <AlertDialogTrigger asChild>
@@ -315,6 +329,39 @@ export function TradingControl({
                   />
                 </label>
               </div>
+              <fieldset className="mt-4 rounded-xl border border-border p-4">
+                <legend className="px-1 text-sm font-medium">Profit requirements</legend>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs font-medium">
+                    Minimum net edge (USD/contract)
+                    <input
+                      type="number"
+                      min="0"
+                      max="0.2"
+                      step="0.001"
+                      value={minNetEdgeValue}
+                      onChange={(event) => setMinNetEdge(event.target.value)}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium">
+                    Cost buffer (USD/contract)
+                    <input
+                      type="number"
+                      min="0"
+                      max="0.05"
+                      step="0.001"
+                      value={costBufferValue}
+                      onChange={(event) => setCostBuffer(event.target.value)}
+                      className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </label>
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  Fees and the cost buffer are deducted before checking the minimum
+                  net edge. These values apply when you confirm this trading run.
+                </p>
+              </fieldset>
               <label className="mt-3 flex items-center gap-2 text-xs font-medium">
                 <input
                   type="checkbox"
@@ -335,8 +382,7 @@ export function TradingControl({
               <p className="mt-2 text-[11px] text-muted-foreground">
                 Minimum accepted budget: 1 unit of each venue's quote currency
                 (USDC or USDT). The actual spend can be lower than the selected
-                maximum. Fees are always deducted; edge and buffer are
-                additional margins. Every connected event can execute long
+                maximum. Every connected event can execute long
                 arbitrage; only events marked on the dashboard can prepare and
                 execute covered shorts.
               </p>

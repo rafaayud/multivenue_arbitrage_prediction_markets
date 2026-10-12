@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 
 import { PageHeader } from "@/components/layout/page-header"
 import { OpportunityTable } from "@/components/signals/opportunity-table"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -24,15 +23,10 @@ import {
   type ArbitrageFilters,
 } from "@/features/arbitrage/filters"
 
-import { useRuntime } from "@/features/runtime/use-runtime"
-
 /** Present selected-event arbitrage signals with long and short filters. */
 export function SignalsPage() {
   const stream = useArbitrageStream()
 
-  const runtime = useRuntime()
-  const [minNetEdge, setMinNetEdge] = useState("0")
-  const [costBuffer, setCostBuffer] = useState("0")
   const [filters, setFilters] = useState<ArbitrageFilters>({
 
     side: "ALL",
@@ -41,26 +35,6 @@ export function SignalsPage() {
     () => filterOpportunities(stream.opportunities, filters),
     [stream.opportunities, filters],
   )
-
-  const currentMinEdge = runtime.runtime?.signal_settings?.min_net_edge
-  const currentCostBuffer = runtime.runtime?.signal_settings?.cost_buffer
-
-  useEffect(() => {
-    if (currentMinEdge !== undefined) setMinNetEdge(String(currentMinEdge))
-    if (currentCostBuffer !== undefined) {
-      setCostBuffer(String(currentCostBuffer))
-    }
-  }, [currentMinEdge, currentCostBuffer])
-
-  const settings = {
-    min_net_edge: Number(minNetEdge),
-    cost_buffer: Number(costBuffer),
-  }
-  const settingsValid =
-    settings.min_net_edge >= 0 &&
-    settings.min_net_edge <= 0.2 &&
-    settings.cost_buffer >= 0 &&
-    settings.cost_buffer <= 0.05
 
   return (
     <>
@@ -113,57 +87,6 @@ export function SignalsPage() {
           </div>
         </CardHeader>
         <CardContent className="px-2 sm:px-5">
-          <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-border/70 bg-background/35 p-3">
-            <label className="block min-w-48 flex-1 text-xs font-medium">
-              Minimum net edge (USD/contract)
-              <input
-                type="number"
-                min="0"
-                max="0.2"
-                step="0.001"
-                value={minNetEdge}
-                onChange={(event) => setMinNetEdge(event.target.value)}
-                className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </label>
-            <label className="block min-w-48 flex-1 text-xs font-medium">
-              Cost buffer (USD/contract)
-              <input
-                type="number"
-                min="0"
-                max="0.05"
-                step="0.001"
-                value={costBuffer}
-                onChange={(event) => setCostBuffer(event.target.value)}
-                className="mt-2 h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </label>
-            <Button
-              variant="secondary"
-              disabled={
-                !settingsValid ||
-                runtime.requestState === "loading" ||
-                runtime.runtime?.trading_enabled
-              }
-              onClick={() => void runtime.updateSignalSettings(settings)}
-            >
-              Apply signal settings
-            </Button>
-            <p className="w-full text-[11px] text-muted-foreground">
-              Fees are always deducted. These values add the required profit
-              and safety margin before a signal is emitted.
-            </p>
-            {runtime.runtime?.trading_enabled && (
-              <p className="w-full text-[11px] text-amber-300">
-                Disable live trading before changing signal settings.
-              </p>
-            )}
-            {runtime.error && (
-              <p className="w-full text-[11px] text-rose-300">
-                {runtime.error}
-              </p>
-            )}
-          </div>
           {stream.historyError && <p role="alert" className="mb-3 text-xs text-amber-600 dark:text-amber-300">{stream.historyError}</p>}
           <OpportunityTable opportunities={opportunities} />
         </CardContent>

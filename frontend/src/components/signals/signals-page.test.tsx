@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
 import { describe, expect, test, vi } from "vitest"
 
 import { SignalsPage } from "@/components/signals/signals-page"
@@ -29,25 +28,12 @@ vi.mock("@/features/runtime/use-runtime", () => ({
 }))
 
 describe("SignalsPage", () => {
-  test("applies fee-aware thresholds to signal detection", async () => {
-    const user = userEvent.setup()
+  test("keeps opportunities read-only after moving thresholds to trading setup", () => {
     render(<SignalsPage />)
-
-    await user.clear(screen.getByLabelText("Minimum net edge (USD/contract)"))
-    await user.type(
-      screen.getByLabelText("Minimum net edge (USD/contract)"),
-      "0.015",
-    )
-    await user.clear(screen.getByLabelText("Cost buffer (USD/contract)"))
-    await user.type(
-      screen.getByLabelText("Cost buffer (USD/contract)"),
-      "0.005",
-    )
-    await user.click(screen.getByRole("button", { name: "Apply signal settings" }))
-
-    expect(state.updateSignalSettings).toHaveBeenCalledWith({
-      min_net_edge: 0.015,
-      cost_buffer: 0.005,
-    })
+    expect(screen.getByRole("combobox", { name: "Filter by opportunity type" })).toBeVisible()
+    expect(screen.queryByLabelText("Minimum net edge (USD/contract)")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Cost buffer (USD/contract)")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Apply signal settings" })).not.toBeInTheDocument()
+    expect(state.updateSignalSettings).not.toHaveBeenCalled()
   })
 })
