@@ -97,12 +97,12 @@ class _RetryMatcher:
         self.calls = 0
         self.retried = asyncio.Event()
 
-    async def match_cycles(self, cycles):
+    async def resolve_regular(self, selections):
         self.calls += 1
         if self.calls == 1:
             await asyncio.Event().wait()
         self.retried.set()
-        return tuple(MarketMatchesUpdated(cycle, ()) for cycle in cycles)
+        return self.result
 
 
 class _Sink:
@@ -459,7 +459,6 @@ def test_recovery_does_not_resubscribe_a_removed_recurring_cycle() -> None:
         _Pipeline(),
         state,
         refresh_seconds=15,
-        cycles=(),
     )
 
     asyncio.run(coordinator._refresh_subscriptions())
@@ -526,8 +525,8 @@ def test_execution_configuration_warms_private_market_subscriptions() -> None:
     ]
 
 
-def test_discovery_timeout_retries_a_stalled_rollover() -> None:
-    """Cancel stalled venue I/O and retry the recurring cycle."""
+def test_discovery_timeout_retries_a_selected_event() -> None:
+    """Cancel stalled venue I/O and retry the selected event."""
 
     async def run_test() -> int:
         matcher = _RetryMatcher()
@@ -540,7 +539,12 @@ def test_discovery_timeout_retries_a_stalled_rollover() -> None:
             refresh_seconds=0.001,
             refresh_timeout_seconds=0.01,
         )
-        coordinator._cycles = (MarketCycle(Underlying("BTC"), 3600),)
+        candidate = RegularCandidate(tuple(
+            _market(VenueID(venue), MarketID(venue), OutcomeID("yes"))
+            for venue in ("POLYMARKET", "LIMITLESS")
+        ))
+        matcher.result = candidate, ()
+        coordinator._matches[monitored_market_key(candidate)] = MarketMatchesUpdated(candidate, ())
         await coordinator.start()
         try:
             await asyncio.wait_for(matcher.retried.wait(), timeout=1)

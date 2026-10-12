@@ -6,7 +6,12 @@ Responsibilities
 """
 
 from dataclasses import dataclass
-from prediction_markets.domain.shared.value_objects import VenueID, EventID, MarketID, OutcomeID
+from prediction_markets.domain.shared.value_objects import (
+    VenueID,
+    EventID,
+    MarketID,
+    OutcomeID,
+)
 from prediction_markets.domain.markets.value_objects import MarketState, MarketResolution
 from prediction_markets.domain.markets.enums import BinaryOutcome
 
@@ -132,28 +137,3 @@ class Market:
 
     def __str__(self):
         return f"{self.title} [{self.venue_id} {self.state.status.value}]"
-
-
-@dataclass(frozen = True, slots = True)
-class Venue:
-    """Represent an immutable execution venue identified by `id`.
-
-    Invariants
-    ----------
-    - The venue id and name are present.
-    """
-    id: VenueID
-    name: str
-    description: str | None = None
-
-    def __post_init__(self):
-        if not self.id:
-            raise ValueError("Venue must have an ID")
-        if not self.name:
-            raise ValueError("Venue must have a name")
-
-    def __repr__(self):
-        return f"Venue({self.id}, {self.name}, {self.description})"
-
-    def __str__(self):
-        return f"{self.name} ({self.id})"

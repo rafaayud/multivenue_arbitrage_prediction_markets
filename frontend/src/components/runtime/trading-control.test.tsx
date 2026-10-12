@@ -65,8 +65,6 @@ describe("TradingControl", () => {
     await user.click(confirm)
 
     expect(value.enable).toHaveBeenCalledWith("secret", {
-      underlyings: [],
-      intervals_seconds: [],
       max_arbitrages: 1,
       max_concurrent_arbitrages: 1,
       polymarket_max_notional: 1,
@@ -121,8 +119,6 @@ describe("TradingControl", () => {
     )
 
     expect(value.enable).toHaveBeenCalledWith("secret", {
-      underlyings: [],
-      intervals_seconds: [],
       max_arbitrages: 3,
       max_concurrent_arbitrages: 2,
       polymarket_max_notional: 10,

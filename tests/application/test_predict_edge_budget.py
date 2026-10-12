@@ -13,7 +13,9 @@ from prediction_markets.domain.market_matching.value_objects import MatchedContr
 from prediction_markets.domain.orderbook.value_objects import OrderBookLevel
 from prediction_markets.domain.shared.value_objects import Price, Quantity, Timestamp, VenueID
 from prediction_markets.domain.trading.enums import OrderSide
-from prediction_markets.infrastructure.venues.predict.taker_fees import PredictTakerFeeCalculator
+from prediction_markets.infrastructure.venues.predict.taker_fees import (
+    PredictTakerFeeCalculator,
+)
 from tests.application.test_engine import _contract, _OnePercentFees, _ZeroFees
 
 
@@ -214,18 +216,3 @@ def test_predict_can_be_left_leg_and_other_routes_are_unchanged():
     enabled = engine._risk_adjusted_opportunity(opportunity, other_pair, other_config)
     disabled = engine._risk_adjusted_opportunity(opportunity, other_pair, replace(other_config, predict_use_edge_budget=False))
     assert enabled == disabled
-
-
-def test_worker_accepts_movement_inside_limit_but_rejects_lost_edge():
-    """Current books may move inside the new limit; existing worker economics still apply."""
-    from tests.api.test_worker_opportunity_validation import _setup
-    from tests.api.test_market_workers import _book
-    from prediction_markets.api.runtime.market_workers import _validate_worker_opportunity
-    from prediction_markets.application.worker_validation import WorkerValidationReason as Reason
-
-    worker, journal, request = _setup()
-    request = replace(request, right_limit_price=Price(Decimal("0.58")))
-    worker.state.books[request.pair.right.id] = _book(request.pair.right, "0.57")
-    assert _validate_worker_opportunity(request, worker, journal).reason is Reason.ACCEPTED
-    worker.state.books[request.pair.right.id] = _book(request.pair.right, "0.61")
-    assert _validate_worker_opportunity(request, worker, journal).reason is Reason.EDGE_LOST

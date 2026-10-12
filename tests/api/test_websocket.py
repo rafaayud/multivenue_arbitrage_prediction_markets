@@ -11,19 +11,13 @@ from decimal import Decimal
 from threading import Event
 from urllib.parse import urlencode
 
+import pytest
+from starlette.websockets import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
-from prediction_markets.api.runtime import MONITORED_MARKET_CYCLES
 from prediction_markets.api.trading_main import app
-from prediction_markets.application.markets.models import (
-    MarketCycle,
-    MarketFamily,
-    monitored_market_key,
-)
-from prediction_markets.domain.market_matching.value_objects import (
-    RegularCandidate,
-    Underlying,
-)
+from prediction_markets.application.markets.models import MarketCycle, monitored_market_key
+from prediction_markets.domain.market_matching.value_objects import RegularCandidate
 from prediction_markets.domain.markets.entities import Market, MarketSide
 from prediction_markets.domain.markets.enums import BinaryOutcome, MarketStatus
 from prediction_markets.domain.markets.value_objects import MarketState
@@ -68,6 +62,9 @@ class _WaitingWorker:
         self.started = Event()
         self.stopped = Event()
 
+    def monitored_market(self, _monitor_key):
+        return _regular_candidate()
+
     async def stream_signal_pairs(self, *args, **kwargs):
         self.started.set()
         try:
@@ -111,80 +108,6 @@ def _regular_candidate() -> RegularCandidate:
     return RegularCandidate(markets)
 
 
-def test_streams_arbitrage_signal_pair_as_json() -> None:
-    market_worker = _MarketWorker(
-        (
-            _signal("polymarket:condition:token", "polymarket", "0.40"),
-            _signal("limitless:market:no", "limitless", "0.50"),
-        )
-    )
-
-    with TestClient(app) as client:
-        app.state.market_worker = market_worker
-        with client.websocket_connect(
-            "/ws/arbitrage-signals?underlying=btc&interval_seconds=3600"
-        ) as websocket:
-            message = websocket.receive_json()
-
-    assert message == {
-        "type": "arbitrage_signal_pair",
-        "monitor_type": "cycle",
-        "monitor_key": "cycle:BTC:3600",
-        "market_label": "BTC",
-        "underlying": "BTC",
-        "interval_seconds": 3600,
-        "signals": [
-            {
-                "contract_id": "polymarket:condition:token",
-                "venue_id": "polymarket",
-                "direction": "buy",
-                "quantity": "2",
-                "limit_price": "0.40",
-                "fair_probability": "0.55",
-                "edge": "0.09",
-                "strategy_id": "long-arbitrage",
-                "generated_at": "2026-07-23T14:30:00Z",
-            },
-            {
-                "contract_id": "limitless:market:no",
-                "venue_id": "limitless",
-                "direction": "buy",
-                "quantity": "2",
-                "limit_price": "0.50",
-                "fair_probability": "0.55",
-                "edge": "0.09",
-                "strategy_id": "long-arbitrage",
-                "generated_at": "2026-07-23T14:30:00Z",
-            },
-        ],
-    }
-    assert market_worker.calls == [MarketCycle(Underlying("BTC"), 3600)]
-
-
-def test_cycle_selector_preserves_registered_family(monkeypatch) -> None:
-    cycle = MarketCycle(Underlying("NVDA"), 86400, MarketFamily.FINANCE)
-    monkeypatch.setitem(
-        MONITORED_MARKET_CYCLES,
-        (cycle.underlying, cycle.interval_seconds),
-        cycle,
-    )
-    market_worker = _MarketWorker(
-        (
-            _signal("polymarket:nvda:yes", "polymarket", "0.40"),
-            _signal("limitless:nvda:no", "limitless", "0.50"),
-        ),
-    )
-
-    with TestClient(app) as client:
-        app.state.market_worker = market_worker
-        with client.websocket_connect(
-            "/ws/arbitrage-signals?underlying=nvda&interval_seconds=86400",
-        ) as websocket:
-            websocket.receive_json()
-
-    assert market_worker.calls == [cycle]
-
-
 def test_streams_regular_candidate_by_monitor_key() -> None:
     """Resolve a regular candidate without cycle-only transport fields."""
     candidate = _regular_candidate()
@@ -218,8 +141,19 @@ def test_stops_stream_when_client_disconnects() -> None:
     with TestClient(app) as client:
         app.state.market_worker = market_worker
         with client.websocket_connect(
-            "/ws/arbitrage-signals?underlying=btc&interval_seconds=3600"
+            "/ws/arbitrage-signals?monitor_key=regular-test"
         ):
             assert market_worker.started.wait(timeout=1)
 
         assert market_worker.stopped.wait(timeout=1)
+
+
+@pytest.mark.parametrize("query", ["underlying=btc&interval_seconds=3600", "monitor_key=cycle:BTC:3600", "monitor_key=unknown", ""])
+def test_rejects_unselected_or_legacy_markets(query):
+    """Only an explicitly monitored regular event may open a signal stream."""
+    with TestClient(app) as client:
+        app.state.market_worker = _MarketWorker(())
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect(f"/ws/arbitrage-signals?{query}"):
+                pass
+        assert error.value.code == 1008

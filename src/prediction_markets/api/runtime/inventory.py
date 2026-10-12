@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from decimal import Decimal
 
@@ -19,7 +18,6 @@ from prediction_markets.api.trading.runner import LiveArbitrageConfig
 from prediction_markets.application.engine import TradingEngine
 from prediction_markets.application.events import (
     InventoryOperationRecorded,
-    MarketMatchesUpdated,
     MarketSettlementRecorded,
     PositionUpdated,
 )
@@ -54,7 +52,7 @@ from prediction_markets.domain.shared.value_objects import (
     Timestamp,
     VenueID,
 )
-from prediction_markets.domain.trading.enums import ArbitrageExecutionStatus, PositionSide
+from prediction_markets.domain.trading.enums import PositionSide
 from prediction_markets.infrastructure.binary_journal import BinaryJournal
 from prediction_markets.infrastructure.fee_conversion import CoinGeckoFeeConverter
 from prediction_markets.infrastructure.venues.limitless.inventory import (
@@ -302,12 +300,12 @@ def _legacy_short_position_repairs(
 
 
 class ShortInventoryCoordinator:
-    """Own covered-short preparation, rollover, and Limitless redemption.
+    """Own covered-short preparation and Limitless redemption.
 
     Notes
     -----
     - Inventory operations are serialized so balance deltas and signer nonces
-      cannot overlap between rollover, activation, and automatic redemption.
+      cannot overlap between activation and automatic redemption.
     """
 
     def __init__(
@@ -317,17 +315,12 @@ class ShortInventoryCoordinator:
         journal: BinaryJournal,
         dispatcher: EventDispatcher,
         execution_resources: list[object],
-        read_available_collateral: Callable[
-            [tuple[MatchedContractPair, ...]],
-            Awaitable[dict[VenueID, Decimal]],
-        ],
     ) -> None:
         self.state = state
         self.engine = engine
         self.journal = journal
         self.dispatcher = dispatcher
         self._execution_resources = execution_resources
-        self._read_available_collateral = read_available_collateral
         self._service_lock = asyncio.Lock()
         # ponytail: serialize inventory for these shared wallets; use per-signer
         # locks if independent wallets need concurrent inventory operations.
@@ -338,12 +331,6 @@ class ShortInventoryCoordinator:
         self._fee_converter: CoinGeckoFeeConverter | None = None
         self._short_inventory_preparing = False
         self._prepared_short_market_keys: tuple[str, ...] = ()
-        self._prepared_short_pair_keys_by_market: dict[str, frozenset[tuple[str, str]]] = {}
-        self._prepared_short_market_ids_by_market: dict[
-            str,
-            frozenset[tuple[VenueID, MarketID]],
-        ] = {}
-        self._minimum_time_remaining_seconds: int | None = None
 
     @property
     def preparing(self) -> bool:
@@ -355,9 +342,6 @@ class ShortInventoryCoordinator:
 
     def clear_prepared(self) -> None:
         self._prepared_short_market_keys = ()
-        self._prepared_short_pair_keys_by_market = {}
-        self._prepared_short_market_ids_by_market = {}
-        self._minimum_time_remaining_seconds = None
 
     async def prepare(
         self,
@@ -386,9 +370,6 @@ class ShortInventoryCoordinator:
             if self.state is None:
                 raise RuntimeError("Arbitrage runtime is not initialized")
             self._prepared_short_market_keys = ()
-            self._prepared_short_pair_keys_by_market = {}
-            self._prepared_short_market_ids_by_market = {}
-            self._minimum_time_remaining_seconds = None
             selections = _short_inventory_selections(
                 self.state,
                 market_keys,
@@ -420,15 +401,6 @@ class ShortInventoryCoordinator:
             self._prepared_short_market_keys = tuple(
                 market_key for market_key, _, _ in selections
             )
-            self._prepared_short_pair_keys_by_market = {
-                market_key: frozenset(pair.key for pair in pairs)
-                for market_key, _, pairs in selections
-            }
-            self._prepared_short_market_ids_by_market = {
-                market_key: frozenset(markets.items())
-                for market_key, markets, _ in selections
-            }
-            self._minimum_time_remaining_seconds = minimum_time_remaining_seconds
             return (
                 frozenset(
                     pair.key
@@ -502,93 +474,6 @@ class ShortInventoryCoordinator:
             raise RuntimeError("Predict inventory transaction remains uncertain")
         return snapshots[0]
 
-    async def refresh(self, event: MarketMatchesUpdated) -> None:
-        """Prepare collateral when a selected recurring market rolls forward.
-
-        Parameters
-        ----------
-        event
-            Latest matched contracts for one recurring market cycle.
-
-        Notes
-        -----
-        - Active executions postpone replacement until a later discovery refresh.
-        - The engine sees new contracts only after every venue confirms inventory.
-        """
-        async with self._operation_lock:
-            if (
-                self.state is None
-                or self.engine is None
-                or not self.state.trading_enabled
-            ):
-                return
-            market_key = monitored_market_key(event.cycle)
-            if market_key not in self._prepared_short_market_keys or not event.pairs:
-                return
-            if self._minimum_time_remaining_seconds is not None:
-                error = _short_inventory_expiry_error(
-                    market_key,
-                    event.cycle,
-                    event.pairs,
-                    self._minimum_time_remaining_seconds,
-                )
-                if error is not None:
-                    _events.warning("Skipping short inventory rollover: %s", error)
-                    return
-            _, markets, pairs = _short_inventory_selection(market_key, event.pairs)
-            market_ids = frozenset(markets.items())
-            previous_market_ids = self._prepared_short_market_ids_by_market.get(
-                market_key,
-                frozenset(),
-            )
-            if market_ids == previous_market_ids:
-                return
-            pair_keys = frozenset(pair.key for pair in pairs)
-            previous_pair_keys = self._prepared_short_pair_keys_by_market.get(
-                market_key,
-                frozenset(),
-            )
-            if any(
-                execution.status
-                not in {
-                    ArbitrageExecutionStatus.COMPLETED,
-                    ArbitrageExecutionStatus.RECOVERED,
-                    ArbitrageExecutionStatus.REJECTED,
-                }
-                for execution in self.state.executions.values()
-            ):
-                return
-
-            self._short_inventory_preparing = True
-            try:
-                service = await self._ensure_service()
-                await service.reconcile_pending(
-                    tuple(self.state.pending_inventory_operations.values()),
-                )
-                balances = await service.ensure_short_inventory(markets)
-                balance_by_venue = {balance.venue_id: balance for balance in balances}
-                inventory_by_contract = {
-                    contract.id: _accounted_short_quantity(
-                        self.state,
-                        self.portfolio_id(),
-                        contract,
-                        balance_by_venue[contract.venue_id],
-                    )
-                    for pair in pairs
-                    for contract in (pair.left, pair.right)
-                }
-                self.engine.replace_short_inventory(
-                    previous_pair_keys,
-                    pair_keys,
-                    inventory_by_contract,
-                )
-                self.engine.refresh_collateral(
-                    await self._read_available_collateral(pairs),
-                )
-            finally:
-                self._short_inventory_preparing = False
-            self._prepared_short_pair_keys_by_market[market_key] = pair_keys
-            self._prepared_short_market_ids_by_market[market_key] = market_ids
 
     async def redeem_limitless_available(
         self,

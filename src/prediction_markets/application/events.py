@@ -45,7 +45,7 @@ from prediction_markets.domain.trading.value_objects import (
 
 @dataclass(frozen=True, slots=True)
 class OpportunityValidationRef:
-    """Identify the worker snapshot that authorized central admission."""
+    """Retain worker provenance for decoding historical journal entries."""
 
     intent_id: str
     partition: str
@@ -86,7 +86,7 @@ class ArbitrageOpportunityFound:
 
 @dataclass(frozen=True, slots=True)
 class OrderBookPairUpdated:
-    """Carry one worker-detected opportunity and its atomic book pair."""
+    """Carry an opportunity and its atomic book pair for local repricing or replay."""
 
     detected: ArbitrageOpportunityFound
     left_order_book: OrderBook

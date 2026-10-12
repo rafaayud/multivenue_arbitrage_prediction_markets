@@ -12,9 +12,6 @@ from prediction_markets.infrastructure.venues.predict.catalog import PredictMark
 from prediction_markets.infrastructure.venues.predict.instrument_discovery import (
     PredictInstrumentDiscoveryAdapter,
 )
-from prediction_markets.infrastructure.venues.predict.key_extraction import (
-    PredictKeyExtractionAdapter,
-)
 from prediction_markets.infrastructure.venues.predict.mappers import PREDICT_VENUE_ID
 from prediction_markets.infrastructure.venues.predict.taker_fees import (
     PredictTakerFeeCalculator,
@@ -44,7 +41,7 @@ def _market() -> dict[str, object]:
     }
 
 
-def test_catalog_reuses_discovery_payload_for_keys_and_fees() -> None:
+def test_catalog_reuses_discovery_payload_for_fees() -> None:
     """Avoid market-detail requests after one atomic discovery response."""
     requests: list[httpx.Request] = []
 
@@ -63,7 +60,6 @@ def test_catalog_reuses_discovery_payload_for_keys_and_fees() -> None:
             client=client,
         )
         discovery = PredictInstrumentDiscoveryAdapter(catalog=catalog)
-        keys = PredictKeyExtractionAdapter(catalog=catalog)
         fees = PredictTakerFeeCalculator(catalog=catalog)
         query = InstrumentDiscoveryQuery(
             venue_id=PREDICT_VENUE_ID,
@@ -76,10 +72,6 @@ def test_catalog_reuses_discovery_payload_for_keys_and_fees() -> None:
                 discovery.discover(query),
                 discovery.discover(query),
             )
-            keyed = await keys.extract_key(
-                result.markets,
-                underlying=Underlying("BTC"),
-            )
             await fees.prepare(tuple(contract.id for contract in result.contracts))
         finally:
             await catalog.close()
@@ -88,7 +80,6 @@ def test_catalog_reuses_discovery_payload_for_keys_and_fees() -> None:
         assert len(result.markets) == 1
         assert len(result.contracts) == 2
         assert duplicate == result
-        assert len(keyed) == 1
 
     asyncio.run(run())
 

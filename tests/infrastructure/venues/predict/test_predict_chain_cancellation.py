@@ -17,14 +17,31 @@ from web3 import Web3
 from web3.exceptions import TransactionNotFound
 
 from prediction_markets.application.codec import decode_event, encode_event
-from prediction_markets.application.events import OrderCancellationPrepared, OrderSnapshotUpdated, TradingSafetyStop
+from prediction_markets.application.events import (
+    OrderCancellationPrepared,
+    OrderSnapshotUpdated,
+    TradingSafetyStop,
+)
 from prediction_markets.application.pipeline import EventSink, OutputDispatcher, RingBuffer
 from prediction_markets.application.state import TradingState
-from prediction_markets.domain.trading.enums import OrderStatus, ReconciliationStatus, SubmissionStatus, OrderSide
-from prediction_markets.domain.trading.value_objects import PreparedOrder, ReconciliationResult, SubmissionResult
+from prediction_markets.domain.trading.enums import (
+    OrderStatus,
+    ReconciliationStatus,
+    SubmissionStatus,
+    OrderSide,
+)
+from prediction_markets.domain.trading.value_objects import (
+    PreparedOrder,
+    ReconciliationResult,
+    SubmissionResult,
+)
 from prediction_markets.infrastructure.binary_journal import BinaryJournal
-from prediction_markets.infrastructure.venues.predict.cancellation import PredictOnChainCancellation
-from prediction_markets.infrastructure.venues.predict.order_updates import PredictOrderUpdateAdapter
+from prediction_markets.infrastructure.venues.predict.cancellation import (
+    PredictOnChainCancellation,
+)
+from prediction_markets.infrastructure.venues.predict.order_updates import (
+    PredictOrderUpdateAdapter,
+)
 from tests.infrastructure.venues.predict.test_predict_settlement import _order, _event
 
 _HASH = "0x" + "ab" * 32
@@ -702,7 +719,7 @@ async def test_trading_enable_rechecks_executions_after_awaited_preflight(status
     engine.enable.side_effect = RuntimeError("reached enable")
     runtime = SimpleNamespace(
         start=AsyncMock(), _ensure_execution=AsyncMock(), engine=engine, state=state,
-        pipeline=Mock(), _inventory=Mock(), _market_workers=None,
+        pipeline=Mock(), _inventory=Mock(),
         _safety=SimpleNamespace(read_available_collateral=collateral),
         _venue_health_service=None,
     )

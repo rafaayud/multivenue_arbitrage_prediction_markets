@@ -1,6 +1,5 @@
 import { API_BASE_URL } from "@/lib/config"
 import type {
-  MarketMatchesResponse,
   MessageResponse,
 } from "@/types/api"
 import type {
@@ -118,9 +117,6 @@ export const apiClient = {
     request<TradingRun>(`/trading-runs/${runId}/stop`, {
       method: "POST",
     }),
-
-  marketMatchesAll: (signal?: AbortSignal) =>
-    request<MarketMatchesResponse[]>("/market-matches/all", { signal }),
 
   arbitrageCandidates: (options: {
     limit?: number

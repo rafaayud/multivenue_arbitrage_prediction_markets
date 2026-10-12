@@ -14,19 +14,11 @@ import pytest
 
 import prediction_markets.infrastructure.venues.predict.market_data_stream as stream_module
 from prediction_markets.domain.market_matching.value_objects import Underlying
-from prediction_markets.domain.market_matching.enums import (
-    ComparisonOperator,
-    UpDownOutcome,
-)
 from prediction_markets.domain.ports.instrument_discovery import (
     InstrumentDiscoveryQuery,
 )
 from prediction_markets.infrastructure.venues.predict.instrument_discovery import (
     PredictInstrumentDiscoveryAdapter,
-)
-from prediction_markets.infrastructure.venues.predict.key_extraction import (
-    PredictKeyExtractionAdapter,
-    _predict_payload_to_up_down_key,
 )
 from prediction_markets.infrastructure.venues.predict.market_data import (
     PredictMarketDataAdapter,
@@ -293,7 +285,7 @@ def test_discovery_cools_down_after_predict_rate_limit():
     assert len(requests) == 1
 
 
-def test_rest_snapshot_and_key_extraction():
+def test_rest_snapshot():
     market = _market()
     contracts = predict_market_to_contracts(market)
 
@@ -310,122 +302,16 @@ def test_rest_snapshot_and_key_extraction():
             client=client,
             contracts=contracts,
         )
-        keys = PredictKeyExtractionAdapter(
-            api_key="secret",
-            base_url="https://example.test",
-            client=client,
-            raw_markets=(market,),
-        )
         try:
             book = await data.get_order_book(contracts[0].id)
-            domain_market = predict_market_to_market(market)
-            assert domain_market is not None
-            extracted = await keys.extract_key(
-                (domain_market,),
-                underlying=Underlying("BTC"),
-            )
-            return book, extracted
+            return book
         finally:
             await client.aclose()
 
-    book, extracted = asyncio.run(exercise())
+    book = asyncio.run(exercise())
 
     assert book is not None
     assert book.best_bid().price.value == Decimal("0.45")
-    assert len(extracted) == 1
-    key = extracted[0][1]
-    assert key.reference_price.amount == Decimal("64700.25")
-    assert str(key.currency) == "USD"
-    assert key.resolution_rule.source == "PYTH"
-    assert key.resolution_rule.tie_outcome == "split"
-
-
-def test_hourly_and_daily_keys_follow_binance_rules():
-    hourly = _market()
-    hourly.update(
-        boostStartsAt="2026-07-23T13:00:00Z",
-        boostEndsAt="2026-07-23T14:00:00Z",
-    )
-    hourly["variantData"].update(
-        priceFeedProvider="BINANCE",
-        priceFeedSymbol="BTCUSDT",
-    )
-    daily = {
-        **hourly,
-        "boostStartsAt": "2026-07-23T16:00:00Z",
-        "boostEndsAt": "2026-07-24T16:00:00Z",
-        "variantData": {**hourly["variantData"]},
-    }
-
-    hourly_key = _predict_payload_to_up_down_key(
-        hourly,
-        underlying=Underlying("BTC"),
-    )
-    daily_key = _predict_payload_to_up_down_key(
-        daily,
-        underlying=Underlying("BTC"),
-    )
-
-    assert str(hourly_key.currency) == "USDT"
-    assert hourly_key.resolution_rule.comparison is ComparisonOperator.GREATER_THAN_OR_EQUAL
-    assert hourly_key.resolution_rule.tie_outcome is UpDownOutcome.UP
-    assert daily_key.resolution_rule.comparison is ComparisonOperator.GREATER_THAN
-    assert daily_key.resolution_rule.tie_outcome is UpDownOutcome.SPLIT
-
-
-def test_predict_key_rejects_a_market_that_has_not_started() -> None:
-    market = _market()
-    market["variantData"]["startPrice"] = None
-
-    with pytest.raises(ValueError, match="start price is missing"):
-        _predict_payload_to_up_down_key(
-            market,
-            underlying=Underlying("BTC"),
-        )
-
-
-def test_key_extraction_refetches_start_price_after_market_opens() -> None:
-    """Retry incomplete detail metadata once per cache TTL."""
-    pending = _market()
-    pending["variantData"]["startPrice"] = None
-    active = _market()
-    requests = 0
-
-    async def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal requests
-        requests += 1
-        return httpx.Response(
-            200,
-            json={"success": True, "data": pending if requests == 1 else active},
-        )
-
-    async def exercise():
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        adapter = PredictKeyExtractionAdapter(
-            api_key="secret",
-            base_url="https://example.test",
-            cache_seconds=0.001,
-            client=client,
-        )
-        market = predict_market_to_market(pending)
-        assert market is not None
-        try:
-            first = await adapter.extract_key((market,), underlying=Underlying("BTC"))
-            cached = await adapter.extract_key(
-                (market,),
-                underlying=Underlying("BTC"),
-            )
-            await asyncio.sleep(0.01)
-            second = await adapter.extract_key((market,), underlying=Underlying("BTC"))
-            return first, cached, second
-        finally:
-            await client.aclose()
-
-    first, cached, second = asyncio.run(exercise())
-
-    assert first == cached == ()
-    assert len(second) == 1
-    assert requests == 2
 
 
 class _WebSocket:

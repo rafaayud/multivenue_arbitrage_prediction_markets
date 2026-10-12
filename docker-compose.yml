@@ -5,8 +5,6 @@ services:
     environment:
       POSTGRES_DSN: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
       DATABASE_URL: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
-      MARKET_DATA_WORKERS_MODE: disabled
-      MARKET_RECURRING_MARKETS_ENABLED: "0"
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -27,8 +25,6 @@ services:
       POSTGRES_DSN: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
       DATABASE_URL: postgresql://prediction_markets:prediction_markets@postgres:5432/prediction_markets
       JOURNAL_PATH: /app/data/trading.log
-      MARKET_DATA_WORKERS_MODE: disabled
-      MARKET_RECURRING_MARKETS_ENABLED: "0"
       # Reject venue updates older than 500 ms at the parent submission guard.
       MARKET_DATA_ENFORCE_SOURCE_AGE: "true"
     ports:

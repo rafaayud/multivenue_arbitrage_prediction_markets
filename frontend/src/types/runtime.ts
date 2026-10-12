@@ -19,7 +19,6 @@ export interface RuntimeState {
   matched_pairs?: number
   orders?: number
   active_executions?: number
-  market_worker_mode?: string
   safety_halted?: boolean
   journal_sequence?: number
   durable_sequence?: number

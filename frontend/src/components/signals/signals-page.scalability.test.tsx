@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, test, vi } from "vitest"
 
 import { SignalsPage } from "@/components/signals/signals-page"
-import type { ArbitrageOpportunity, Underlying } from "@/types/arbitrage"
+import type { ArbitrageOpportunity } from "@/types/arbitrage"
 
 const state = vi.hoisted(() => ({
   opportunities: [] as ArbitrageOpportunity[],
@@ -12,15 +12,6 @@ vi.mock("@/features/arbitrage/arbitrage-stream-provider", () => ({
   useArbitrageStream: () => ({
     connectionStatus: "connected",
     opportunities: state.opportunities,
-  }),
-}))
-
-vi.mock("@/features/markets/use-market-matches", () => ({
-  useMarketMatches: () => ({
-    matches: [],
-    loading: false,
-    error: null,
-    updatedAt: null,
   }),
 }))
 
@@ -38,24 +29,24 @@ vi.mock("@/features/runtime/use-runtime", () => ({
 }))
 
 function opportunity(
-  underlying: Underlying,
-  intervalSeconds = 86400,
+  title: string,
+  side: "LONG" | "SHORT" = "LONG",
 ): ArbitrageOpportunity {
   const generatedAt = "2026-07-29T12:00:00Z"
   return {
-    id: `${underlying}:${intervalSeconds}`,
-    monitorType: "cycle",
-    monitorKey: `cycle:${underlying}:${intervalSeconds}`,
-    marketLabel: underlying,
-    underlying,
-    intervalSeconds,
-    side: "LONG",
+    id: `${title}:${side}`,
+    monitorType: "regular",
+    monitorKey: `regular:${title}`,
+    marketLabel: title,
+    underlying: null,
+    intervalSeconds: null,
+    side,
     generatedAt,
     signals: [
       {
-        contractId: `${underlying}:left`,
+        contractId: `${title}:left`,
         venueId: "polymarket",
-        direction: "buy",
+        direction: side === "LONG" ? "buy" : "sell",
         quantity: 1,
         limitPrice: 0.4,
         fairProbability: 0.6,
@@ -64,9 +55,9 @@ function opportunity(
         generatedAt,
       },
       {
-        contractId: `${underlying}:right`,
+        contractId: `${title}:right`,
         venueId: "limitless",
-        direction: "buy",
+        direction: side === "LONG" ? "buy" : "sell",
         quantity: 1,
         limitPrice: 0.5,
         fairProbability: 0.5,
@@ -79,28 +70,24 @@ function opportunity(
 }
 
 describe("SignalsPage scalability", () => {
-  test("derives asset options from the live signal stream", () => {
-    state.opportunities = [opportunity("SOL", 12345), opportunity("BTC")]
+  test("filters event opportunities by direction without cycle selectors", () => {
+    state.opportunities = [opportunity("Election A"), opportunity("Election B", "SHORT")]
 
     render(<SignalsPage />)
 
     const trigger = screen.getByRole("combobox", {
-      name: "Filter by underlying",
+      name: "Filter by opportunity type",
     })
     fireEvent.keyDown(trigger, { key: "ArrowDown" })
-    const solOption = screen.getByRole("option", { name: "SOL" })
-    expect(solOption).toBeInTheDocument()
-    fireEvent.click(solOption)
+    const shortOption = screen.getByRole("option", { name: "Short" })
+    expect(shortOption).toBeInTheDocument()
+    fireEvent.click(shortOption)
 
-    const intervalTrigger = screen.getByRole("combobox", {
-      name: "Filter by interval",
-    })
-    fireEvent.keyDown(intervalTrigger, { key: "ArrowDown" })
-    expect(screen.getByRole("option", { name: "12345s" })).toBeInTheDocument()
-    fireEvent.keyDown(document, { key: "Escape" })
+    expect(screen.queryByRole("combobox", { name: "Filter by underlying" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: "Filter by interval" })).not.toBeInTheDocument()
 
     const table = within(screen.getByRole("table"))
-    expect(table.getByText("SOL")).toBeInTheDocument()
-    expect(table.queryByText("BTC")).not.toBeInTheDocument()
+    expect(table.getByText("Election B")).toBeInTheDocument()
+    expect(table.queryByText("Election A")).not.toBeInTheDocument()
   })
 })

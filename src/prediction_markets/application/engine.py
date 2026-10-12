@@ -308,72 +308,6 @@ class TradingEngine:
         self._collateral_reservations.clear()
         self._admission_routes.clear()
 
-    def replace_short_inventory(
-        self,
-        previous_pair_keys: frozenset[tuple[str, str]],
-        pair_keys: frozenset[tuple[str, str]],
-        inventory_by_contract: Mapping[ContractID, Quantity],
-    ) -> None:
-        """Replace one rolled market's covered-short inventory.
-
-        Parameters
-        ----------
-        previous_pair_keys
-            Contract pairs prepared for the expired market window.
-        pair_keys
-            Contract pairs prepared for the new market window.
-        inventory_by_contract
-            Confirmed complete-set quantity for each new contract.
-
-        Raises
-        ------
-        RuntimeError
-            If the engine is unconfigured or an execution is still active.
-
-        Notes
-        -----
-        - Inventory for other selected cycles retains its consumed quantity.
-        """
-        config = self._config
-        if config is None:
-            raise RuntimeError("Trading engine is not configured")
-        if any(
-            execution.status
-            not in {
-                ArbitrageExecutionStatus.COMPLETED,
-                ArbitrageExecutionStatus.RECOVERED,
-                ArbitrageExecutionStatus.REJECTED,
-            }
-            for execution in self.state.executions.values()
-        ):
-            raise RuntimeError(
-                "Cannot replace short inventory during an active execution",
-            )
-
-        previous_contract_ids = {
-            ContractID(contract_id)
-            for pair_key in previous_pair_keys
-            for contract_id in pair_key
-        }
-        configured_inventory = {
-            contract_id: quantity
-            for contract_id, quantity in config.short_inventory_by_contract.items()
-            if contract_id not in previous_contract_ids
-        }
-        configured_inventory.update(inventory_by_contract)
-        self._config = replace(
-            config,
-            short_pair_keys=(config.short_pair_keys - previous_pair_keys) | pair_keys,
-            short_inventory_by_contract=configured_inventory,
-        )
-        for contract_id in previous_contract_ids:
-            self._short_inventory_remaining.pop(contract_id, None)
-        self._short_inventory_remaining.update(
-            {
-                contract_id: quantity.value
-                for contract_id, quantity in inventory_by_contract.items()
-            },
-        )
 
     def enable(self, config: EngineConfig) -> None:
         """Enable command generation using a new run's risk limits."""
@@ -699,7 +633,7 @@ class TradingEngine:
         request
             Staged, never-submitted execution whose deadline must not move.
         left, right
-            Atomic worker snapshots translated to the parent clock.
+            Current local snapshots used to recompute the staged plan.
 
         Returns
         -------
@@ -731,7 +665,7 @@ class TradingEngine:
                 or book.outcome_id != contract.outcome_id
             ):
                 return None
-        opportunity = self.detect_shadow_opportunity(
+        opportunity = self._detect_opportunity(
             pair, left, right, request.opportunity.opportunity.side,
         )
         if opportunity is None:
@@ -766,7 +700,6 @@ class TradingEngine:
                         role: marks[old] for role, old in new_roles.items()
                         if old in marks
                     })
-            timings.worker_reprices += 1
         return replace(
             request, opportunity=detected, planned=planned,
             commands=(primary, hedge),
@@ -866,14 +799,15 @@ class TradingEngine:
         self._detectors[key] = detectors
         return detectors
 
-    def detect_shadow_opportunity(
+
+    def _detect_opportunity(
         self,
         pair: MatchedContractPair,
         left: OrderBook,
         right: OrderBook,
         side: OrderSide,
     ) -> ArbitrageOpportunity | None:
-        """Detect one requested side for worker shadow-mode comparison.
+        """Recompute one side from current books before repricing a staged execution.
 
         Parameters
         ----------

@@ -18,15 +18,12 @@ Notes
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import timedelta
-from uuid import uuid4
 
 from prediction_markets.application.events import (
     ExecutionPreparationRequested,
-    ArbitrageOpportunityFound,
-    OpportunityValidationRef,
     ExecutionUpdated,
     OrderBookUpdated,
     OrderPrepared,
@@ -55,12 +52,6 @@ from prediction_markets.infrastructure.observability.predict_fill_study import (
 from prediction_markets.infrastructure.observability.execution_timing import (
     ThreadCallTiming, timed_to_thread,
 )
-from prediction_markets.application.worker_validation import (
-    WorkerOpportunityValidationRequest,
-    WorkerOpportunityValidationResult,
-    WorkerValidationReason,
-)
-from prediction_markets.application.recovery_books import RECOVERY_BOOKS_TIMEOUT_NS
 from prediction_markets.application.markets.models import market_expiry_guard_seconds
 from prediction_markets.application.pipeline.buffers import (
     EventSink,
@@ -74,12 +65,7 @@ from prediction_markets.domain.market_matching.value_objects import RegularCandi
 from prediction_markets.domain.orderbook.entities import OrderBook
 from prediction_markets.domain.ports.execution import ExecutionPort, OrderUpdatePort
 from prediction_markets.domain.ports.market_data import MarketDataPort
-from prediction_markets.domain.shared.value_objects import (
-    ClientOrderID,
-    ContractID,
-    Timestamp,
-    VenueID,
-)
+from prediction_markets.domain.shared.value_objects import ClientOrderID, Timestamp, VenueID
 from prediction_markets.domain.trading.entities import (
     ArbitrageExecutionJournal,
     OrderSnapshot,
@@ -134,12 +120,9 @@ def _local_polymarket_buy_reprice_books(
     -------
     tuple[OrderBook, OrderBook] | None
         Pair books for central replanning, or ``None`` when no full-depth
-        Polymarket price improvement exists or worker validation owns the pair.
+        Polymarket price improvement exists.
     """
-    if (
-        request.opportunity.validation_ref is not None
-        or request.opportunity.opportunity.side is not OrderSide.BUY
-    ):
+    if request.opportunity.opportunity.side is not OrderSide.BUY:
         return None
     pair = request.opportunity.pair
     left = state.books.get(pair.left.id)
@@ -226,7 +209,7 @@ class OutputDispatcher:
             or the batch cannot be journaled.
         reprice_staged_execution
             Repeats central admission and risk for an unjournaled replacement
-            using worker books, without extending its deadline.
+            using local books, without extending its deadline.
         guard_recovery
             Rechecks recovery depth economics against central loss limits after signing.
         enforce_source_age
@@ -251,23 +234,12 @@ class OutputDispatcher:
         self._guard_recovery = guard_recovery
         self._started_recovery_commands: set[ClientOrderID] = set()
         self._staged_requests: dict[str, ExecutionPreparationRequested] = {}
-        self._worker_validator: Callable[
-            [WorkerOpportunityValidationRequest], Awaitable[WorkerOpportunityValidationResult]
-        ] | None = None
-        self._worker_capture: Callable[..., None] | None = None
-        self._worker_recovery_books: Callable[
-            [str, OpportunityValidationRef, tuple[ContractID, ContractID]],
-            Awaitable[tuple[OrderBook, OrderBook]],
-        ] | None = None
         self._max_book_age_ns = max_book_age_ms * 1_000_000
         self._enforce_source_age = (
             source_age_guard_enabled()
             if enforce_source_age is None
             else enforce_source_age
         )
-        self._worker_book_age_observer: (
-            Callable[[str, VenueID, ContractID, str, int, int], None] | None
-        ) = None
         self._execution: dict[VenueID, ExecutionPort] = {}
         self._updates: dict[VenueID, OrderUpdatePort] = {}
         self._market_data: dict[VenueID, MarketDataPort] = {}
@@ -275,92 +247,23 @@ class OutputDispatcher:
         self._watchers: set[asyncio.Task[None]] = set()
         self._cancellation_locks: dict[VenueID, asyncio.Lock] = {}
 
-    def set_worker_book_age_observer(
-        self,
-        observer: Callable[
-            [str, VenueID, ContractID, str, int, int],
-            None,
-        ]
-        | None,
-    ) -> None:
-        """Attach parent guard and submission age telemetry for worker books."""
-        self._worker_book_age_observer = observer
-
-    def set_worker_validation(
-        self,
-        validator: Callable[
-            [WorkerOpportunityValidationRequest], Awaitable[WorkerOpportunityValidationResult]
-        ] | None,
-        *,
-        capture: Callable[..., None] | None = None,
-        recovery_books: Callable[
-            [str, OpportunityValidationRef, tuple[ContractID, ContractID]],
-            Awaitable[tuple[OrderBook, OrderBook]],
-        ] | None = None,
-    ) -> None:
-        """Attach bounded worker IPC checks and optional non-blocking diagnostics.
-
-        Notes
-        -----
-        - Worker-originated pairs fail closed when the validator is unavailable.
-        - Single-process pairs without worker provenance keep their local guard.
-        """
-        self._worker_validator = validator
-        self._worker_capture = capture
-        self._worker_recovery_books = recovery_books
 
     async def _current_recovery_books(
         self, execution: ArbitrageExecutionJournal,
     ) -> tuple[OrderBook, OrderBook]:
-        """Read the owning worker or local memory without refreshing clocks or using REST.
+        """Read current in-memory books without refreshing their timestamps.
 
         Raises
         ------
         RuntimeError
-            If the execution changed, or the worker or identified books are unavailable.
-        TimeoutError
-            If serial worker lookups exhaust the one-second retry budget.
-
-        Notes
-        -----
-        - Only IPC timeouts retry; each request retains its 100 ms deadline.
-          Retries neither submit orders nor consume recovery order attempts.
-        - The fresh-quote caller's enclosing deadline still bounds nested reads.
+            If execution authority changed, or either book has missing or
+            inconsistent contract identity or an invalid arrival timestamp.
         """
+        if (self._state.executions.get(execution.id) != execution
+                or execution.id in self._state.execution_safety_stops):
+            raise RuntimeError("recovery changed during book lookup")
         contracts = (execution.leg1_contract_id, execution.leg2_contract_id)
-        reference = self._state.execution_worker_refs.get(execution.id)
-        if reference is not None:
-            if self._worker_recovery_books is None:
-                raise RuntimeError("worker recovery books unavailable")
-            deadline = asyncio.timeout(_RECOVERY_FRESH_BOOK_WAIT_SECONDS)
-            try:
-                async with deadline:
-                    while True:
-                        if (self._state.executions.get(execution.id) != execution
-                                or execution.id in self._state.execution_safety_stops
-                                or self._state.execution_worker_refs.get(execution.id) != reference):
-                            raise RuntimeError("recovery changed during book lookup")
-                        try:
-                            books = await asyncio.wait_for(
-                                self._worker_recovery_books(execution.id, reference, contracts),
-                                RECOVERY_BOOKS_TIMEOUT_NS / 1_000_000_000,
-                            )
-                        except TimeoutError:
-                            await asyncio.sleep(_RECOVERY_BOOK_POLL_SECONDS)
-                            continue
-                        break
-            except TimeoutError as cause:
-                if not deadline.expired():
-                    raise
-                raise TimeoutError("recovery book lookup wait expired") from cause
-            if (self._state.executions.get(execution.id) != execution
-                    or execution.id in self._state.execution_safety_stops
-                    or self._state.execution_worker_refs.get(execution.id) != reference):
-                raise RuntimeError("recovery changed during book lookup")
-        else:
-            books = tuple(self._state.books.get(contract_id) for contract_id in contracts)
-        if len(books) != 2:
-            raise RuntimeError("recovery book pair unavailable")
+        books = tuple(self._state.books.get(contract_id) for contract_id in contracts)
         for contract_id, book in zip(contracts, books, strict=True):
             contract = self._state.contracts.get(contract_id)
             if (contract is None or book is None or book.market_id != contract.market_id
@@ -382,14 +285,8 @@ class OutputDispatcher:
         if self._state.executions.get(execution.id) != execution:
             return
         contracts = (execution.leg1_contract_id, execution.leg2_contract_id)
-        reference = self._state.execution_worker_refs.get(execution.id)
         if request.not_before_ns is None:
             observe_execution_window(execution.id, tuple(map(str, contracts)), reason="recovery")
-            if reference is not None and self._worker_capture is not None:
-                try:
-                    self._worker_capture(execution.id, reference, contracts, reason="recovery")
-                except Exception:
-                    pass  # Diagnostic capture cannot decide whether recovery is allowed.
         wait = asyncio.timeout(
             None if request.deadline_at_ns is None
             else max(0, request.deadline_at_ns - time.monotonic_ns()) / 1_000_000_000,
@@ -399,8 +296,7 @@ class OutputDispatcher:
                 if request.not_before_ns is not None:
                     await asyncio.sleep(max(0, request.not_before_ns - time.monotonic_ns()) / 1_000_000_000)
                 if (self._state.executions.get(execution.id) != execution
-                        or execution.id in self._state.execution_safety_stops
-                        or self._state.execution_worker_refs.get(execution.id) != reference):
+                        or execution.id in self._state.execution_safety_stops):
                     raise RuntimeError("recovery changed during quote wait")
                 books = await self._current_recovery_books(execution)
         except Exception as error:
@@ -437,9 +333,9 @@ class OutputDispatcher:
         Notes
         -----
         - Only stale recovery quotes wait; fresh quotes return immediately.
-        - Serial, bounded IPC reads preserve original book timestamps. There is
-          no REST refresh, age-limit relaxation, or order submission here.
-        - Cancellation, worker failure, or changed execution stops the wait.
+        - Local book reads preserve original timestamps; no REST refresh,
+          age-limit relaxation, or order submission occurs here.
+        - Cancellation or changed execution authority stops the wait.
         """
         error = None
         deadline = asyncio.timeout(_RECOVERY_FRESH_BOOK_WAIT_SECONDS)
@@ -474,113 +370,12 @@ class OutputDispatcher:
                 raise
             raise TimeoutError(f"recovery fresh-book wait expired: {error}") from cause
 
-    def _capture_commands(
-        self,
-        commands: tuple[SubmitOrder, ...],
-        reference: OpportunityValidationRef | None = None,
-    ) -> None:
-        """Request selective diagnostic windows without waiting for persistence."""
+    def _capture_commands(self, commands: tuple[SubmitOrder, ...]) -> None:
+        """Request local diagnostic windows without waiting for persistence."""
         execution_id = commands[0].execution_id
-        contracts = tuple(command.intent.contract_id for command in commands)
+        contracts = tuple(str(command.intent.contract_id) for command in commands)
         reason = "recovery" if commands[0].role == "recovery" else "execution"
-        observe_execution_window(execution_id, tuple(map(str, contracts)), reason=reason)
-        reference = reference or self._state.execution_worker_refs.get(execution_id)
-        if reference is not None and self._worker_capture is not None:
-            try:
-                self._worker_capture(execution_id, reference, contracts, reason=reason)
-            except Exception:
-                # Diagnostic failures must not authorize or reject a venue command.
-                return
-
-    async def _validate_worker_pair(
-        self,
-        commands: tuple[SubmitOrder, SubmitOrder],
-        *,
-        opportunity: ArbitrageOpportunityFound | None = None,
-        deadline_at_ns: int | None = None,
-        phase: str = "validation_preparation",
-    ) -> WorkerOpportunityValidationResult | None:
-        """Fetch current worker books, preserving identity, clocks, and deadlines.
-
-        Returns
-        -------
-        WorkerOpportunityValidationResult | None
-            Accepted/reprice evidence, or ``None`` for a single-process pair.
-
-        Raises
-        ------
-        RuntimeError
-            If worker evidence is unavailable, invalid, stale, or late.
-        """
-        execution_id = commands[0].execution_id
-        reference = (opportunity.validation_ref if opportunity is not None else
-                     self._state.execution_worker_refs.get(execution_id))
-        if reference is None:
-            return None
-        if self._worker_validator is None:
-            raise RuntimeError("worker validation unavailable")
-        cycle = opportunity.cycle if opportunity is not None else self._state.execution_cycles.get(execution_id)
-        pair = opportunity.pair if opportunity is not None else next(
-            (candidate for candidate in self._state.matches.get(cycle, ())
-             if candidate.key == self._state.execution_pairs.get(execution_id)), None,
-        )
-        by_contract = {command.intent.contract_id: command for command in commands}
-        if pair is None or set(by_contract) != {pair.left.id, pair.right.id}:
-            raise RuntimeError("worker validation identity mismatch")
-        left, right = by_contract[pair.left.id], by_contract[pair.right.id]
-        if (left.intent.side is not right.intent.side or left.intent.limit_price is None
-                or right.intent.limit_price is None or right.execution_id != execution_id):
-            raise RuntimeError("worker validation identity mismatch")
-        started = time.monotonic_ns()
-        validation_deadline = started + int(_WORKER_VALIDATION_TIMEOUT_SECONDS * 1_000_000_000)
-        if deadline_at_ns is not None:
-            validation_deadline = min(validation_deadline, deadline_at_ns)
-        if validation_deadline <= started:
-            raise RuntimeError("pre-submission deadline expired before worker validation")
-        request = WorkerOpportunityValidationRequest(
-            uuid4().hex, execution_id, reference, cycle, pair, left.intent.side,
-            left.intent.quantity, right.intent.quantity,
-            left.intent.limit_price, right.intent.limit_price, time.time_ns(),
-            self._max_book_age_ns, self._enforce_source_age,
-            validation_deadline_at_ns=validation_deadline,
-        )
-        try:
-            result = await asyncio.wait_for(
-                self._worker_validator(request),
-                max(0, validation_deadline - time.monotonic_ns()) / 1_000_000_000,
-            )
-        except TimeoutError as error:
-            raise RuntimeError("worker validation timeout") from error
-        finally:
-            timings = self._state.timings.get(execution_id)
-            if timings is not None:
-                timings.worker_validation_count += 1
-                timings.worker_validation_ns += time.monotonic_ns() - started
-        if not isinstance(result, WorkerOpportunityValidationResult) or result.request != request:
-            raise RuntimeError("worker validation identity mismatch")
-        captured_mono_ns, captured_wall_ns = time.monotonic_ns(), time.time_ns()
-        for command, book, generation in (
-            (left, result.left_order_book, result.left_book_generation),
-            (right, result.right_order_book, result.right_book_generation),
-        ):
-            observe_book_checkpoint(command, book, phase=phase,
-                validation=result, book_generation=generation,
-                monotonic_at_ns=captured_mono_ns, wall_at_ns=captured_wall_ns)
-        if result.reason not in {WorkerValidationReason.ACCEPTED, WorkerValidationReason.REPRICE}:
-            raise RuntimeError(f"worker validation {result.reason.value}")
-        if (not request.sent_monotonic_at_ns <= result.responded_monotonic_at_ns <= time.monotonic_ns()
-                or (deadline_at_ns is not None and time.monotonic_ns() > deadline_at_ns)):
-            raise RuntimeError("worker validation stale response")
-        for contract, book in ((pair.left, result.left_order_book), (pair.right, result.right_order_book)):
-            if (book is None or book.market_id != contract.market_id
-                    or book.outcome_id != contract.outcome_id or book.received_at_ns is None):
-                raise RuntimeError("worker validation book identity mismatch")
-        # No await separates these updates; the parent sees one complete pair.
-        for contract, book in ((pair.left, result.left_order_book), (pair.right, result.right_order_book)):
-            current = self._state.books.get(contract.id)
-            if current is None or (current.received_at_ns or 0) <= book.received_at_ns:
-                self._state.apply(OrderBookUpdated(contract.venue_id, contract.id, book))
-        return result
+        observe_execution_window(execution_id, contracts, reason=reason)
 
     def configure(
         self,
@@ -716,7 +511,7 @@ class OutputDispatcher:
                     request, commands = revised, revised.commands
                     self._staged_requests[request.planned.execution.id] = request
                     observe_fill_study(request)
-            self._capture_commands(commands, request.opportunity.validation_ref)
+            self._capture_commands(commands)
             if rejection_reason is None:
                 results = await asyncio.gather(
                     *(self._prepare(command, journal_prepared=False) for command in commands),
@@ -740,45 +535,6 @@ class OutputDispatcher:
                     )
                 elif time.monotonic_ns() > request.deadline_at_ns:
                     rejection_reason = "pre-submission deadline expired after preparation"
-
-        if rejection_reason is None:
-            try:
-                validation = await self._validate_worker_pair(
-                    commands, opportunity=request.opportunity, deadline_at_ns=request.deadline_at_ns,
-                )
-                if validation is not None and validation.reason is WorkerValidationReason.REPRICE:
-                    revised = (self._reprice_staged_execution(
-                        request, validation.left_order_book, validation.right_order_book,
-                    ) if self._reprice_staged_execution is not None else None)
-                    if revised is None:
-                        raise RuntimeError("worker reprice rejected by central admission or risk")
-                    request, commands = revised, revised.commands
-                    self._staged_requests[request.planned.execution.id] = request
-                    observe_fill_study(request)
-                    reprepare_started = time.monotonic_ns()
-                    try:
-                        results = await asyncio.gather(
-                            *(self._prepare(command, journal_prepared=False) for command in commands),
-                            return_exceptions=True,
-                        )
-                    finally:
-                        if (timings := self._state.timings.get(commands[0].execution_id)) is not None:
-                            timings.worker_reprepare_ns += time.monotonic_ns() - reprepare_started
-                    prepared_pair, collected_events = [], []
-                    for command, result in zip(commands, results, strict=True):
-                        if isinstance(result, BaseException):
-                            error = error or result
-                        else:
-                            adapter, prepared = result
-                            prepared_pair.append((adapter, prepared))
-                            collected_events.append(OrderPrepared(command, prepared))
-                    prepared_events = tuple(collected_events)
-                    if error is not None:
-                        raise RuntimeError(f"worker reprice preparation failed: {error}")
-                if time.monotonic_ns() > request.deadline_at_ns:
-                    raise RuntimeError("pre-submission deadline expired after worker validation")
-            except Exception as validation_error:
-                rejection_reason = str(validation_error)
 
         batch = PreparedExecutionBatch(
             request.opportunity,
@@ -849,27 +605,13 @@ class OutputDispatcher:
         *,
         deadline_at_ns: int | None = None,
     ) -> None:
-        """Validate worker state after durability, then guard and submit the pair."""
-        try:
-            validation = await self._validate_worker_pair(commands, deadline_at_ns=deadline_at_ns,
-                phase="validation_final")
-            if validation is not None and validation.reason is WorkerValidationReason.REPRICE:
-                raise RuntimeError("worker reprice limit reached before submission")
-        except Exception as validation_error:
-            await self.reject_pair(commands, str(validation_error))
-            return
+        """Guard the durable pair against current books before submitting."""
         timings = self._state.timings.get(commands[0].execution_id)
         guard_checked_ns = time.monotonic_ns()
         guard_wall_at_ns = time.time_ns()
         for queued in commands:
             observe_book_checkpoint(queued, self._state.books.get(queued.intent.contract_id),
                 phase="guard", monotonic_at_ns=guard_checked_ns, wall_at_ns=guard_wall_at_ns)
-            self._observe_worker_book_age(
-                queued,
-                "guard",
-                guard_checked_ns,
-                guard_wall_at_ns,
-            )
         guard_error = (
             "pre-submission deadline expired"
             if deadline_at_ns is not None and guard_checked_ns > deadline_at_ns
@@ -970,7 +712,7 @@ class OutputDispatcher:
           only legacy commands retain balance-settlement retries of the same payload.
         - Uncertain responses never authorize a replacement order.
         - Stale quotes wait for a bounded in-memory update before rejection;
-          reading the same old worker snapshot does not exhaust all requotes.
+          reading the same old local snapshot does not exhaust all requotes.
         """
         execution = self._state.executions.get(command.execution_id)
         if execution is not None:
@@ -1329,12 +1071,6 @@ class OutputDispatcher:
                 submit_started_ns,
             )
 
-        self._observe_worker_book_age(
-            command,
-            "submission",
-            submit_started_ns,
-            time.time_ns(),
-        )
 
         submit_call = ThreadCallTiming() if timings is not None else None
         if timings is not None:
@@ -1346,23 +1082,6 @@ class OutputDispatcher:
 
         return self._record_initial(updates, result)
 
-    def _observe_worker_book_age(
-        self,
-        command: SubmitOrder,
-        stage: str,
-        monotonic_at_ns: int,
-        wall_at_ns: int,
-    ) -> None:
-        """Report one checkpoint without coupling dispatch to worker metrics."""
-        if self._worker_book_age_observer is not None:
-            self._worker_book_age_observer(
-                command.execution_id,
-                command.venue_id,
-                command.intent.contract_id,
-                stage,
-                monotonic_at_ns,
-                wall_at_ns,
-            )
 
     async def _cancel_submission(
         self,

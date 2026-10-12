@@ -113,63 +113,6 @@ class OrderIntent:
 
 
 @dataclass(frozen=True, slots=True)
-class ExecutionEvent:
-    """Represent a normalized venue update, including cumulative and last-fill quantities."""
-
-    status: OrderStatus
-    client_order_id: ClientOrderID | None = None
-    order_id: OrderID | None = None
-    filled_quantity: Quantity = Quantity(Decimal("0"))
-    last_fill_quantity: Quantity = Quantity(Decimal("0"))
-    last_fill_price: Price | None = None
-    average_price: Price | None = None
-    reported_at: Timestamp | None = None
-    message: str | None = None
-
-    def __post_init__(self):
-        if self.filled_quantity.value > 0 and self.average_price is None:
-            raise ValueError("ExecutionEvent average_price is required when filled quantity is positive")
-
-        if self.last_fill_quantity.value > 0 and self.last_fill_price is None:
-            raise ValueError("ExecutionEvent last_fill_price is required when last fill quantity is positive")
-
-        if self.last_fill_quantity.value > self.filled_quantity.value:
-            raise ValueError("ExecutionEvent last fill quantity cannot exceed total filled quantity")
-
-        if self.message is not None and not self.message.strip():
-            raise ValueError("ExecutionEvent message cannot be blank if provided")
-
-        if self.client_order_id is None and self.order_id is None:
-            raise ValueError("ExecutionEvent requires either client_order_id or order_id")
-
-    def fill_ratio(self, requested_quantity: Quantity) -> FillRatio:
-        """
-        Compute cumulative fill ratio against the requested quantity.
-
-        Parameters
-        ----------
-        requested_quantity
-            Original quantity used to normalize the fill.
-
-        Returns
-        -------
-        FillRatio
-            Exact Decimal-backed ratio; raises ``ValueError`` for non-positive input.
-        """
-        if requested_quantity.value <= 0:
-            raise ValueError("Requested quantity must be positive")
-        return FillRatio(self.filled_quantity.value / requested_quantity.value)
-
-    def is_terminal(self) -> bool:
-        return self.status in {
-            OrderStatus.FILLED,
-            OrderStatus.CANCELLED,
-            OrderStatus.REJECTED,
-            OrderStatus.EXPIRED,
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class OrderSnapshot:
     """Capture the latest normalized order state used by settlement and accounting.
 

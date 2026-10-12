@@ -1,4 +1,4 @@
-"""Verify current worker books reach central recovery planning before signing."""
+"""Verify current local books reach central recovery planning before signing."""
 
 import asyncio
 import time
@@ -9,14 +9,26 @@ import pytest
 
 from prediction_markets.application.engine import EngineConfig, TradingEngine
 from prediction_markets.application.events import (
-    MarketMatchesUpdated, OpportunityValidationRef, OrderBookUpdated,
-    RecoveryBooksReceived, RecoveryPlanningRequested, SubmissionReceived, SubmitOrder,
+    MarketMatchesUpdated,
+    OrderBookUpdated,
+    RecoveryBooksReceived,
+    RecoveryPlanningRequested,
+    SubmissionReceived,
+    SubmitOrder,
     TradingSafetyStop,
 )
 from prediction_markets.application.markets.models import MarketCycle
-from prediction_markets.application.pipeline import EventLoop, EventSink, OutputDispatcher, RingBuffer
+from prediction_markets.application.pipeline import (
+    EventLoop,
+    EventSink,
+    OutputDispatcher,
+    RingBuffer,
+)
 from prediction_markets.application.state import EventDispatcher, TradingState
-from prediction_markets.domain.market_matching.value_objects import MatchedContractPair, Underlying
+from prediction_markets.domain.market_matching.value_objects import (
+    MatchedContractPair,
+    Underlying,
+)
 from prediction_markets.domain.orderbook.value_objects import OrderBookLevel
 from prediction_markets.domain.shared.value_objects import Price, Quantity, Timestamp, VenueID
 from prediction_markets.domain.trading.enums import ArbitrageExecutionStatus, OrderSide
@@ -57,9 +69,6 @@ def _setup(tmp_path, *, max_loss="1", short=False, short_prices=("0.12", "0.92")
     commands = {event.intent.contract_id: event for event in planned if isinstance(event, SubmitOrder)}
     source, missing = commands[left.id], commands[right.id]
     _process(engine, _fill(source, Price(Decimal(source_price)), source.intent.quantity))
-    state.execution_worker_refs[source.execution_id] = OpportunityValidationRef(
-        "intent", "crypto-slow", "generation", 1, "old-left", "old-right",
-    )
     journal = BinaryJournal(tmp_path / "recovery.log")
     inputs, outputs = RingBuffer(32), RingBuffer(32)
     loop = EventLoop(inputs, outputs, journal, engine)
@@ -71,7 +80,7 @@ def _setup(tmp_path, *, max_loss="1", short=False, short_prices=("0.12", "0.92")
 @pytest.mark.parametrize("predict_price,expected_price,side", [
     ("0.49", "0.49", OrderSide.BUY), ("0.65", "0.44", OrderSide.SELL),
 ])
-def test_recovery_plans_and_submits_with_latest_worker_price(
+def test_recovery_plans_and_submits_with_latest_local_price(
     tmp_path, predict_price, expected_price, side,
 ):
     """Neither stale admission prices nor REST can select the recovery limit."""
@@ -83,18 +92,18 @@ def test_recovery_plans_and_submits_with_latest_worker_price(
             right.id: _book(right, predict_price, "8"),
         }
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             calls.append(contracts)
             return tuple(books[contract_id] for contract_id in contracts)
 
         class NoREST:
             async def get_order_book(self, contract_id):
-                raise AssertionError("Recovery must read worker memory, not REST")
+                raise AssertionError("Recovery must read local memory, not REST")
 
         adapters = {left.venue_id: _BalanceDelayedExecution(journal, left.venue_id),
                     right.venue_id: _Execution(journal, right.venue_id)}
         dispatch.configure(adapters, market_data={venue: NoREST() for venue in adapters})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             request = await outputs.get()
@@ -103,7 +112,7 @@ def test_recovery_plans_and_submits_with_latest_worker_price(
             await dispatch._request_recovery_plan(request)
             received = await inputs.get()
             assert isinstance(received, RecoveryBooksReceived)
-            assert engine.state.books[right.id].best_ask().price.value == Decimal("0.42")
+            assert engine.state.books[right.id].best_ask().price.value == Decimal(predict_price)
             await loop.process(received)
             command = await outputs.get()
             assert isinstance(command, SubmitOrder)
@@ -141,7 +150,7 @@ def test_recovery_routes_to_fresh_book_before_signing_without_rest(tmp_path, sta
             )
         reads = 0
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             nonlocal reads
             reads += 1
             now_ns, wall_ns = time.monotonic_ns(), time.time_ns()
@@ -167,7 +176,7 @@ def test_recovery_routes_to_fresh_book_before_signing_without_rest(tmp_path, sta
 
         adapter = _Execution(journal, left.venue_id)
         dispatch.configure({left.venue_id: adapter}, market_data={left.venue_id: NoREST(), right.venue_id: NoREST()})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.92")), Quantity(Decimal("0"))))
             await dispatch._request_recovery_plan(await outputs.get())
@@ -198,7 +207,7 @@ def test_changed_price_during_signing_replans_without_sending_stale_order(tmp_pa
         engine, left, right, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
         reads = 0
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             nonlocal reads
             reads += 1
             books = {left.id: _book(left, "0.44", "8", bid=True),
@@ -207,7 +216,7 @@ def test_changed_price_during_signing_replans_without_sending_stale_order(tmp_pa
 
         adapter = _Execution(journal, right.venue_id)
         dispatch.configure({right.venue_id: adapter})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             await dispatch._request_recovery_plan(await outputs.get())
@@ -251,10 +260,9 @@ def test_sparse_predict_quotes_wait_before_creating_first_recovery(tmp_path, nex
         }
         reads = 0
         polling = asyncio.Event()
-        captured = []
         deadlines = []
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             nonlocal reads
             reads += 1
             if reads >= 3:
@@ -268,8 +276,7 @@ def test_sparse_predict_quotes_wait_before_creating_first_recovery(tmp_path, nex
         adapters = {left.venue_id: _Execution(journal, left.venue_id),
                     right.venue_id: _Execution(journal, right.venue_id)}
         dispatch.configure(adapters, market_data={venue: NoREST() for venue in adapters})
-        dispatch.set_worker_validation(None, recovery_books=current_books,
-                                       capture=lambda *args, **kwargs: captured.append(args))
+        _publish_on_read(dispatch, current_books)
 
         async def next_command():
             while True:
@@ -298,7 +305,6 @@ def test_sparse_predict_quotes_wait_before_creating_first_recovery(tmp_path, nex
             )
             command = await asyncio.wait_for(task, 0.5)
             assert len(set(deadlines)) == 1 and len(deadlines) >= 3
-            assert len(captured) == 1  # Polling cannot flood capture-trigger IPC.
             assert command.intent.contract_id == selected.id
             assert command.intent.quantity.value == Decimal("5")
             assert command.intent.limit_price.value == Decimal(price)
@@ -327,7 +333,7 @@ def test_quote_deadline_reviews_once_without_fake_attempts(tmp_path, monkeypatch
         dispatch._enforce_source_age = True
         reads = 0
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             nonlocal reads
             reads += 1
             predict = _book(right, "0.85" if unusable == "loss" else "0.95", "1000", bid=True)
@@ -339,7 +345,7 @@ def test_quote_deadline_reviews_once_without_fake_attempts(tmp_path, monkeypatch
             books = {left.id: _book(left, "0.06", "257"), right.id: predict}
             return tuple(books[contract_id] for contract_id in contracts)
 
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.96")), Quantity(Decimal("0"))))
             deadlines = []
@@ -364,82 +370,9 @@ def test_quote_deadline_reviews_once_without_fake_attempts(tmp_path, monkeypatch
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("phase", ["planning", "fresh_quote", "after_signing"])
-@pytest.mark.parametrize("failure", ["reply_timeout", "unresponsive"])
-def test_transient_recovery_lookup_timeouts_retry_without_consuming_orders(
-    tmp_path, monkeypatch, phase, failure,
-):
-    """A transient IPC miss must retry serially in every recovery lookup caller."""
-    async def run():
-        engine, left, right, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
-        monkeypatch.setattr(order_dispatch, "RECOVERY_BOOKS_TIMEOUT_NS", 20_000_000)
-        calls = active = cancelled = 0
-        first_failure = 1 if phase == "planning" else 2
-        returned = []
-        if phase == "fresh_quote":
-            engine.state.books[right.id] = replace(
-                engine.state.books[right.id], received_at_ns=time.monotonic_ns() - 2_000_000_000,
-            )
-
-        async def current_books(execution_id, reference, contracts):
-            nonlocal calls, active, cancelled
-            calls += 1
-            active += 1
-            assert active == 1
-            try:
-                if first_failure <= calls < first_failure + 2:
-                    if failure == "reply_timeout":
-                        raise TimeoutError("Worker recovery books: timeout")
-                    try:
-                        await asyncio.Event().wait()
-                    finally:
-                        cancelled += 1
-                books = {left.id: _book(left, "0.44", "8", bid=True),
-                         right.id: _book(right, "0.49", "8")}
-                pair = tuple(books[contract_id] for contract_id in contracts)
-                returned.append(pair)
-                return pair
-            finally:
-                active -= 1
-
-        class NoREST:
-            async def get_order_book(self, contract_id):
-                raise AssertionError("IPC retries must not fetch REST")
-
-        adapter = _Execution(journal, right.venue_id)
-        dispatch.configure({right.venue_id: adapter}, market_data={right.venue_id: NoREST()})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
-        try:
-            await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
-            await asyncio.wait_for(dispatch._request_recovery_plan(await outputs.get()), 0.5)
-            received = await inputs.get()
-            assert received.error is None
-            assert all(book is original for book, original in zip(received.books, returned[0], strict=True))
-            await loop.process(received)
-            command = await outputs.get()
-            assert isinstance(command, SubmitOrder)
-            if phase == "fresh_quote":
-                engine.state.books[right.id] = replace(
-                    engine.state.books[right.id], received_at_ns=time.monotonic_ns() - 1_300_000_000,
-                )
-            await asyncio.wait_for(dispatch._submit_single(command), 0.5)
-            result = await inputs.get()
-            assert result.result.reference.recovery_data != b"local-pre-submission-guard"
-            assert len(adapter.submitted) == 1
-            recovery = engine.state.recoveries[command.execution_id]
-            assert recovery.attempts == 1 and recovery.local_rejections == 0
-            assert calls == (5 if phase == "fresh_quote" else 4)
-            assert active == 0 and cancelled == (2 if failure == "unresponsive" else 0)
-            assert inputs.size == 0 and outputs.size == 0
-        finally:
-            await dispatch.close()
-            journal.close()
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("action", ["cancel", "superseded", "generation", "safety_stop"])
+@pytest.mark.parametrize("action", ["cancel", "superseded", "safety_stop"])
 def test_delayed_recovery_poll_cannot_outlive_its_authority(tmp_path, action):
-    """Stop before another IPC request if authority changes during the polling delay."""
+    """Stop before another local read if authority changes during the polling delay."""
     async def run():
         engine, _, _, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
         calls = 0
@@ -449,7 +382,7 @@ def test_delayed_recovery_poll_cannot_outlive_its_authority(tmp_path, action):
             calls += 1
             raise AssertionError("Changed authority must stop before lookup")
 
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             request = replace(await outputs.get(), not_before_ns=time.monotonic_ns() + 100_000_000)
@@ -465,9 +398,6 @@ def test_delayed_recovery_poll_cannot_outlive_its_authority(tmp_path, action):
                     engine.state.executions[missing.execution_id] = replace(
                         request.execution, status=ArbitrageExecutionStatus.COMPLETED,
                     )
-                elif action == "generation":
-                    reference = engine.state.execution_worker_refs[missing.execution_id]
-                    engine.state.execution_worker_refs[missing.execution_id] = replace(reference, process_generation="new")
                 else:
                     engine.state.execution_safety_stops[missing.execution_id] = TradingSafetyStop(
                         missing.venue_id, "uncertain order", Timestamp.now(), execution_id=missing.execution_id,
@@ -476,91 +406,6 @@ def test_delayed_recovery_poll_cannot_outlive_its_authority(tmp_path, action):
                 response = await inputs.get()
                 assert "recovery changed during quote wait" in response.error
             assert calls == 0 and not engine.state.recoveries
-        finally:
-            await dispatch.close()
-            journal.close()
-    asyncio.run(run())
-
-
-def test_quote_deadline_cancels_a_pending_ipc_read(tmp_path):
-    """The outer quote budget bounds even a worker lookup already in flight."""
-    async def run():
-        engine, _, _, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
-        active = cancelled = 0
-
-        async def current_books(*args):
-            nonlocal active, cancelled
-            active += 1
-            try:
-                await asyncio.Event().wait()
-            finally:
-                active -= 1
-                cancelled += 1
-
-        dispatch.set_worker_validation(None, recovery_books=current_books)
-        try:
-            await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
-            request = replace(await outputs.get(), deadline_at_ns=time.monotonic_ns() + 40_000_000)
-            engine._pending_recovery_books[missing.execution_id] = request
-            await asyncio.wait_for(dispatch._request_recovery_plan(request), 0.3)
-            response = await inputs.get()
-            assert "recovery quote wait expired" in response.error
-            await loop.process(response)
-            assert active == 0 and cancelled == 1
-            assert not engine._pending_recovery_books and outputs.size == 0
-            assert not engine.state.recoveries
-            assert engine.state.executions[missing.execution_id].status is ArbitrageExecutionStatus.NEEDS_REVIEW
-        finally:
-            await dispatch.close()
-            journal.close()
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("action", ["cancel", "superseded", "generation", "safety_stop"])
-def test_recovery_lookup_retry_stops_on_cancellation_or_changed_authority(tmp_path, action):
-    """A timeout retry cannot outlive cancellation or authorize a changed execution."""
-    async def run():
-        engine, _, _, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        calls = 0
-
-        async def current_books(execution_id, reference, contracts):
-            nonlocal calls
-            calls += 1
-            entered.set()
-            await release.wait()
-            raise TimeoutError("Worker recovery books: timeout")
-
-        dispatch.set_worker_validation(None, recovery_books=current_books)
-        try:
-            await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
-            request = await outputs.get()
-            task = asyncio.create_task(dispatch._request_recovery_plan(request))
-            await asyncio.wait_for(entered.wait(), 0.5)
-            if action == "cancel":
-                task.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await task
-                assert inputs.size == 0
-            else:
-                if action == "superseded":
-                    engine.state.executions[missing.execution_id] = replace(
-                        request.execution, status=ArbitrageExecutionStatus.COMPLETED,
-                    )
-                elif action == "generation":
-                    reference = engine.state.execution_worker_refs[missing.execution_id]
-                    engine.state.execution_worker_refs[missing.execution_id] = replace(reference, process_generation="new")
-                else:
-                    engine.state.execution_safety_stops[missing.execution_id] = TradingSafetyStop(
-                        missing.venue_id, "uncertain order", Timestamp.now(), execution_id=missing.execution_id,
-                    )
-                release.set()
-                await asyncio.wait_for(task, 0.5)
-                received = await inputs.get()
-                assert "recovery changed" in received.error
-                assert received.books is None
-            assert calls == 1 and outputs.size == 0
         finally:
             await dispatch.close()
             journal.close()
@@ -580,7 +425,7 @@ def test_stale_recovery_waits_for_a_real_update_before_consuming_requotes(tmp_pa
         books = {left.id: _book(left, "0.44", "8", bid=True), right.id: _book(right, "0.49", "8")}
         reads = 0
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             nonlocal reads
             reads += 1
             return tuple(books[contract_id] for contract_id in contracts)
@@ -591,7 +436,7 @@ def test_stale_recovery_waits_for_a_real_update_before_consuming_requotes(tmp_pa
 
         adapter = _Execution(journal, right.venue_id)
         dispatch.configure({right.venue_id: adapter}, market_data={right.venue_id: NoREST()})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             await dispatch._request_recovery_plan(await outputs.get())
@@ -644,7 +489,7 @@ def test_stale_recovery_waits_for_a_real_update_before_consuming_requotes(tmp_pa
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("failure", ["worker", "timeout", "loss", "superseded"])
+@pytest.mark.parametrize("failure", ["missing", "loss", "superseded"])
 def test_recovery_unavailable_or_superseded_books_cannot_submit(tmp_path, monkeypatch, failure):
     """A bounded read failure or changed execution never sends an unbounded recovery."""
     async def run():
@@ -652,16 +497,14 @@ def test_recovery_unavailable_or_superseded_books_cannot_submit(tmp_path, monkey
         monkeypatch.setattr(engine_module, "_RECOVERY_QUOTE_WAIT_NS", 150_000_000)
         engine, left, right, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path, max_loss="0.1")
 
-        async def current_books(execution_id, reference, contracts):
-            if failure == "worker":
-                raise RuntimeError("Worker recovery books: process_generation")
-            if failure == "timeout":
-                await asyncio.Event().wait()
+        async def current_books(contracts):
+            if failure == "missing":
+                return (None, None)
             books = {left.id: _book(left, "0.44", "8", bid=True),
                      right.id: _book(right, "0.65", "8")}
             return tuple(books[contract_id] for contract_id in contracts)
 
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             request = await outputs.get()
@@ -693,7 +536,7 @@ def test_recovery_book_aging_during_signing_waits_before_final_guard(tmp_path):
         dispatch._max_book_age_ns = 100_000_000
         books = {left.id: _book(left, "0.44", "8", bid=True), right.id: _book(right, "0.49", "8")}
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             return tuple(books[contract_id] for contract_id in contracts)
 
         class SlowSigner(_Execution):
@@ -703,7 +546,7 @@ def test_recovery_book_aging_during_signing_waits_before_final_guard(tmp_path):
 
         adapter = SlowSigner(journal, right.venue_id)
         dispatch.configure({right.venue_id: adapter})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             await dispatch._request_recovery_plan(await outputs.get())
@@ -731,14 +574,14 @@ def test_queued_recovery_cannot_submit_after_execution_becomes_terminal(tmp_path
     async def run():
         engine, left, right, missing, journal, inputs, outputs, loop, dispatch = _setup(tmp_path)
 
-        async def current_books(execution_id, reference, contracts):
+        async def current_books(contracts):
             books = {left.id: _book(left, "0.44", "8", bid=True),
                      right.id: _book(right, "0.49", "8")}
             return tuple(books[contract_id] for contract_id in contracts)
 
         adapter = _Execution(journal, right.venue_id)
         dispatch.configure({right.venue_id: adapter})
-        dispatch.set_worker_validation(None, recovery_books=current_books)
+        _publish_on_read(dispatch, current_books)
         try:
             await loop.process(_fill(missing, Price(Decimal("0.42")), Quantity(Decimal("0"))))
             await dispatch._request_recovery_plan(await outputs.get())
@@ -775,3 +618,16 @@ def test_suppressed_recovery_io_during_reconciliation_is_explicit_review(tmp_pat
             await dispatch.close()
             journal.close()
     asyncio.run(run())
+
+
+def _publish_on_read(dispatch, updates):
+    """Simulate stream updates before reading the real local recovery cache."""
+    current = dispatch._current_recovery_books
+
+    async def read_books(execution):
+        contracts = (execution.leg1_contract_id, execution.leg2_contract_id)
+        books = await updates(contracts)
+        dispatch._state.books.update(zip(contracts, books, strict=True))
+        return await current(execution)
+
+    dispatch._current_recovery_books = read_books

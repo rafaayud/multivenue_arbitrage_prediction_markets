@@ -1,1 +1,0 @@
-"""Kalshi infrastructure adapters."""

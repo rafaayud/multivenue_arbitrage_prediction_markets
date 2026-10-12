@@ -36,7 +36,6 @@ from prediction_markets.application.venue_health import (
     VenueHealthReport,
     VenueHealthService,
 )
-from prediction_markets.domain.market_matching.value_objects import Underlying
 from prediction_markets.domain.venue_health import VenueHealthStatus
 
 router = APIRouter(
@@ -194,8 +193,6 @@ async def start_trading_run(
         )
 
     config = LiveArbitrageConfig(
-        underlyings=tuple(Underlying(value) for value in body.underlyings),
-        intervals_seconds=body.intervals_seconds,
         max_arbitrages=body.max_arbitrages,
         max_concurrent_arbitrages=body.max_concurrent_arbitrages,
         polymarket_max_notional=body.polymarket_max_notional,

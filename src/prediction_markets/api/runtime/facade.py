@@ -17,22 +17,17 @@ from decimal import Decimal
 from pathlib import Path
 
 from prediction_markets.infrastructure.observability.predict_fill_study import (
-    capture_status,
     observe_event as observe_fill_study,
     start_study,
     stop_study,
 )
 
 from prediction_markets.api.runtime.accounting import RuntimeAccounting
-from prediction_markets.api.runtime.feeds import (
-    MONITORED_MARKET_CYCLES,
-    _MarketFeedCoordinator,
-)
+from prediction_markets.api.runtime.feeds import _MarketFeedCoordinator
 from prediction_markets.api.runtime.inventory import (
     ShortInventoryCoordinator,
     _legacy_short_position_repairs,
 )
-from prediction_markets.api.runtime.market_workers import MarketWorkerSupervisor
 from prediction_markets.api.runtime.persistence import RuntimePersistence
 from prediction_markets.api.runtime.safety import (
     RuntimeSafety,
@@ -44,9 +39,6 @@ from prediction_markets.api.runtime.safety import (
 from prediction_markets.api.trading.run_manager import ExecutionRunManager
 from prediction_markets.api.trading.runner import LiveArbitrageConfig, preflight
 from prediction_markets.application.engine import TradingEngine
-from prediction_markets.application.events import (
-    MarketMatchesUpdated,
-)
 from prediction_markets.application.freshness import source_age_guard_enabled
 from prediction_markets.application.markets.matching import MarketMatcher
 from prediction_markets.application.markets.models import (
@@ -57,9 +49,6 @@ from prediction_markets.application.markets.models import (
 from prediction_markets.application.pipeline import RecoveryCoordinator, TradingPipeline
 from prediction_markets.application.state import EventDispatcher, TradingState
 from prediction_markets.application.venue_health import VenueHealthService
-from prediction_markets.domain.contracts.entities import BinaryContract
-from prediction_markets.domain.contracts.value_objects import TickSize
-from prediction_markets.domain.market_matching.value_objects import Underlying
 from prediction_markets.domain.outcome_inventory import InventoryOperationSnapshot
 from prediction_markets.domain.ports.execution import ExecutionPort, OrderUpdatePort
 from prediction_markets.domain.ports.market_data import MarketDataPort
@@ -80,32 +69,62 @@ from prediction_markets.domain.trading.enums import ArbitrageExecutionStatus
 from prediction_markets.infrastructure.binary_journal import BinaryJournal
 from prediction_markets.infrastructure.metrics import observe_arbitrage_orderbooks
 from prediction_markets.infrastructure.venues.limitless.catalog import LimitlessMarketCatalog
-from prediction_markets.infrastructure.venues.limitless.execution import LimitlessExecutionAdapter
-from prediction_markets.infrastructure.venues.limitless.instrument_discovery import LimitlessInstrumentDiscoveryAdapter
-from prediction_markets.infrastructure.venues.limitless.key_extraction import LimitlessKeyExtractionAdapter
+from prediction_markets.infrastructure.venues.limitless.execution import (
+    LimitlessExecutionAdapter,
+)
+from prediction_markets.infrastructure.venues.limitless.instrument_discovery import (
+    LimitlessInstrumentDiscoveryAdapter,
+)
 from prediction_markets.infrastructure.venues.limitless.mappers import LIMITLESS_VENUE_ID
-from prediction_markets.infrastructure.venues.limitless.market_data import LimitlessMarketDataAdapter
-from prediction_markets.infrastructure.venues.limitless.market_data_stream import LimitlessMarketDataStreamAdapter
-from prediction_markets.infrastructure.venues.limitless.order_updates import LimitlessOrderUpdateAdapter
-from prediction_markets.infrastructure.venues.limitless.taker_fees import LimitlessTakerFeeCalculator
-from prediction_markets.infrastructure.venues.polymarket.execution import PolymarketExecutionAdapter
-from prediction_markets.infrastructure.venues.polymarket.instrument_discovery import PolymarketInstrumentDiscoveryAdapter
-from prediction_markets.infrastructure.venues.polymarket.key_extraction import PolymarketKeyExtractionAdapter
+from prediction_markets.infrastructure.venues.limitless.market_data import (
+    LimitlessMarketDataAdapter,
+)
+from prediction_markets.infrastructure.venues.limitless.market_data_stream import (
+    LimitlessMarketDataStreamAdapter,
+)
+from prediction_markets.infrastructure.venues.limitless.order_updates import (
+    LimitlessOrderUpdateAdapter,
+)
+from prediction_markets.infrastructure.venues.limitless.taker_fees import (
+    LimitlessTakerFeeCalculator,
+)
+from prediction_markets.infrastructure.venues.polymarket.execution import (
+    PolymarketExecutionAdapter,
+)
+from prediction_markets.infrastructure.venues.polymarket.instrument_discovery import (
+    PolymarketInstrumentDiscoveryAdapter,
+)
 from prediction_markets.infrastructure.venues.polymarket.mappers import POLYMARKET_VENUE_ID
-from prediction_markets.infrastructure.venues.polymarket.market_data import PolymarketMarketDataAdapter
-from prediction_markets.infrastructure.venues.polymarket.market_data_stream import PolymarketMarketDataStreamAdapter
-from prediction_markets.infrastructure.venues.polymarket.order_updates import PolymarketOrderUpdateAdapter
-from prediction_markets.infrastructure.venues.polymarket.taker_fees import PolymarketTakerFeeCalculator
-from prediction_markets.infrastructure.venues.polynode.key_extraction import PolynodeKeyExtractionAdapter
+from prediction_markets.infrastructure.venues.polymarket.market_data import (
+    PolymarketMarketDataAdapter,
+)
+from prediction_markets.infrastructure.venues.polymarket.market_data_stream import (
+    PolymarketMarketDataStreamAdapter,
+)
+from prediction_markets.infrastructure.venues.polymarket.order_updates import (
+    PolymarketOrderUpdateAdapter,
+)
+from prediction_markets.infrastructure.venues.polymarket.taker_fees import (
+    PolymarketTakerFeeCalculator,
+)
 from prediction_markets.infrastructure.venues.predict.catalog import PredictMarketCatalog
 from prediction_markets.infrastructure.venues.predict.execution import PredictExecutionAdapter
-from prediction_markets.infrastructure.venues.predict.instrument_discovery import PredictInstrumentDiscoveryAdapter
-from prediction_markets.infrastructure.venues.predict.key_extraction import PredictKeyExtractionAdapter
+from prediction_markets.infrastructure.venues.predict.instrument_discovery import (
+    PredictInstrumentDiscoveryAdapter,
+)
 from prediction_markets.infrastructure.venues.predict.mappers import PREDICT_VENUE_ID
-from prediction_markets.infrastructure.venues.predict.market_data import PredictMarketDataAdapter
-from prediction_markets.infrastructure.venues.predict.market_data_stream import PredictMarketDataStreamAdapter
-from prediction_markets.infrastructure.venues.predict.order_updates import PredictOrderUpdateAdapter
-from prediction_markets.infrastructure.venues.predict.taker_fees import PredictTakerFeeCalculator
+from prediction_markets.infrastructure.venues.predict.market_data import (
+    PredictMarketDataAdapter,
+)
+from prediction_markets.infrastructure.venues.predict.market_data_stream import (
+    PredictMarketDataStreamAdapter,
+)
+from prediction_markets.infrastructure.venues.predict.order_updates import (
+    PredictOrderUpdateAdapter,
+)
+from prediction_markets.infrastructure.venues.predict.taker_fees import (
+    PredictTakerFeeCalculator,
+)
 
 
 _LIMITLESS_REDEEM_INTERVAL_SECONDS = 300.0
@@ -178,7 +197,6 @@ class ArbitrageRuntime:
         self._source_age_guard_enabled = source_age_guard_enabled()
         self._stack: AsyncExitStack | None = None
         self._feed: _MarketFeedCoordinator | None = None
-        self._market_workers: MarketWorkerSupervisor | None = None
         self._persistence: RuntimePersistence | None = None
         self._safety: RuntimeSafety | None = None
         self._inventory: ShortInventoryCoordinator | None = None
@@ -226,12 +244,6 @@ class ArbitrageRuntime:
             predict_discovery = PredictInstrumentDiscoveryAdapter(
                 catalog=predict_catalog,
             )
-            polynode_keys = PolynodeKeyExtractionAdapter()
-            polymarket_keys = PolymarketKeyExtractionAdapter(
-                polynode_key_extractor=polynode_keys,
-            )
-            limitless_keys = LimitlessKeyExtractionAdapter(catalog=limitless_catalog)
-            predict_keys = PredictKeyExtractionAdapter(catalog=predict_catalog)
             polymarket_fees = PolymarketTakerFeeCalculator()
             limitless_fees = LimitlessTakerFeeCalculator(
                 api_key=os.getenv("LIMITLESS_API_KEY"),
@@ -244,10 +256,6 @@ class ArbitrageRuntime:
                 polymarket_discovery,
                 limitless_discovery,
                 predict_discovery,
-                polynode_keys,
-                polymarket_keys,
-                limitless_keys,
-                predict_keys,
                 polymarket_fees,
                 limitless_fees,
                 predict_fees,
@@ -259,11 +267,6 @@ class ArbitrageRuntime:
                 LIMITLESS_VENUE_ID: limitless_discovery,
                 PREDICT_VENUE_ID: predict_discovery,
             }
-            keys = {
-                POLYMARKET_VENUE_ID: polymarket_keys,
-                LIMITLESS_VENUE_ID: limitless_keys,
-                PREDICT_VENUE_ID: predict_keys,
-            }
             fees = {
                 POLYMARKET_VENUE_ID: polymarket_fees,
                 LIMITLESS_VENUE_ID: limitless_fees,
@@ -274,7 +277,7 @@ class ArbitrageRuntime:
                 LIMITLESS_VENUE_ID: LimitlessMarketDataStreamAdapter(),
                 PREDICT_VENUE_ID: PredictMarketDataStreamAdapter(),
             }
-            self.market_matcher = MarketMatcher(discovery, keys)
+            self.market_matcher = MarketMatcher(discovery)
             sync_interval = Decimal(
                 os.getenv("JOURNAL_SYNC_INTERVAL_MS", "10"),
             ) / Decimal("1000")
@@ -324,23 +327,6 @@ class ArbitrageRuntime:
                 self.journal,
                 self.dispatcher,
                 self._execution_resources,
-                self._safety.read_available_collateral,
-            )
-            self._market_workers = MarketWorkerSupervisor(
-                self.pipeline,
-                min_net_edge=self._signal_min_net_edge,
-                cost_buffer=self._signal_cost_buffer,
-                central_engine=self.engine,
-                on_cycle_matches=self._prepare_worker_matches,
-                on_tick_size_change=self._apply_worker_tick_size,
-            )
-            self.pipeline.output_dispatcher.set_worker_book_age_observer(
-                self._market_workers.observe_parent_book_age,
-            )
-            self.pipeline.output_dispatcher.set_worker_validation(
-                self._market_workers.validate_opportunity,
-                capture=self._market_workers.capture_execution,
-                recovery_books=self._market_workers.recovery_books,
             )
             self._accounting = RuntimeAccounting(
                 self.journal,
@@ -365,16 +351,6 @@ class ArbitrageRuntime:
                 self.pipeline,
                 self.state,
                 refresh_seconds=float(os.getenv("MARKET_REFRESH_SECONDS", "15")),
-                cycles=(
-                    tuple(
-                        cycle
-                        for cycle in MONITORED_MARKET_CYCLES.values()
-                        if cycle not in self._market_workers.cycles
-                    )
-                    if os.getenv("MARKET_RECURRING_MARKETS_ENABLED", "1") != "0"
-                    else ()
-                ),
-                on_cycle_matches=self._inventory.refresh,
             )
             self.execution_runs = ExecutionRunManager(
                 self._run_execution,
@@ -405,8 +381,6 @@ class ArbitrageRuntime:
         if self.pipeline is None or self._feed is None:
             raise RuntimeError("Arbitrage runtime is not initialized")
         await self.pipeline.start()
-        if self._market_workers is not None:
-            await self._market_workers.start()
         await self._feed.start()
         self._start_limitless_redemption()
         if self.state is not None and any(
@@ -425,8 +399,6 @@ class ArbitrageRuntime:
         if self.engine is not None:
             self.engine.disable()
         await self._stop_limitless_redemption()
-        if self._market_workers is not None:
-            await self._market_workers.stop()
         if self._feed is not None:
             await self._feed.stop()
         if self.pipeline is not None:
@@ -461,16 +433,6 @@ class ArbitrageRuntime:
         self._limitless_redeem_task = None
         self._limitless_redeem_stop_event = None
 
-    def current_pairs(
-        self,
-        underlying: Underlying,
-        interval_seconds: int,
-    ) -> tuple[tuple[BinaryContract, BinaryContract], ...]:
-        """Return the in-memory pair snapshot for a monitored cycle."""
-        if self.state is None:
-            return ()
-        cycle = MONITORED_MARKET_CYCLES.get((underlying, interval_seconds))
-        return self.state.current_pairs(cycle) if cycle is not None else ()
 
     async def monitor_regular(
         self,
@@ -621,14 +583,7 @@ class ArbitrageRuntime:
         """Resolve a stable signal-stream key to its monitored market."""
         if self._feed is None:
             return None
-        market = self._feed.monitored_market(monitor_key)
-        if market is not None:
-            return market
-        return (
-            self._market_workers.monitored_market(monitor_key)
-            if self._market_workers is not None
-            else None
-        )
+        return self._feed.monitored_market(monitor_key)
 
     def stream_signal_pairs(self, market: MonitoredMarket):
         """Stream opportunity signals for one monitored market."""
@@ -671,10 +626,6 @@ class ArbitrageRuntime:
                 and pipeline.running
                 and self._feed
                 and self._feed.running
-                and (
-                    self._market_workers is None
-                    or self._market_workers.running
-                )
             ),
             "journal_sequence": journal.last_sequence if journal else 0,
             "durable_sequence": journal.durable_sequence if journal else 0,
@@ -696,7 +647,6 @@ class ArbitrageRuntime:
             "error": str(
                 (pipeline.error if pipeline else None)
                 or (self._feed.error if self._feed else None)
-                or (self._market_workers.error if self._market_workers else None)
                 or (persistence.error if persistence else None)
                 or "",
             ) or None,
@@ -710,16 +660,7 @@ class ArbitrageRuntime:
                 inventory.prepared_market_keys if inventory else ()
             ),
             "regular_markets": self._feed.regular_markets if self._feed else (),
-            "market_worker_mode": (
-                self._market_workers.mode.value
-                if self._market_workers is not None
-                else "disabled"
-            ),
-            "market_workers": (
-                self._market_workers.status() if self._market_workers else ()
-            ),
-            "predict_fill_capture": capture_status(),
-            **(_trading_state_status(state) if state else {}),
+            **(_trading_state_status(state) if state is not None else {}),
         }
 
     def configure_signals(
@@ -758,16 +699,12 @@ class ArbitrageRuntime:
                 cost_buffer=cost_buffer,
             ).engine_config(),
         )
-        if self._market_workers is not None:
-            self._market_workers.configure(min_net_edge, cost_buffer)
         return self.status()
 
     def preflight(self) -> dict[str, object]:
         """Combine environment checks with current journal recovery state."""
         report = preflight()
         if self.pipeline is not None and self.pipeline.error is not None:
-            report["ready"] = False
-        if self._market_workers is not None and self._market_workers.error is not None:
             report["ready"] = False
         if self._persistence is not None and self._persistence.error is not None:
             report["ready"] = False
@@ -796,11 +733,14 @@ class ArbitrageRuntime:
             raise RuntimeError("Arbitrage runtime is not initialized")
         self._signal_min_net_edge = config.min_net_edge
         self._signal_cost_buffer = config.cost_buffer
-        if self._market_workers is not None:
-            self._market_workers.configure(config.min_net_edge, config.cost_buffer)
         pair_keys: frozenset[tuple[str, str]] = frozenset()
         short_inventory_by_contract: dict[ContractID, Quantity] = {}
         if config.short_market_keys:
+            if self._feed is None or any(
+                not isinstance(self._feed.monitored_market(key), RegularCandidate)
+                for key in config.short_market_keys
+            ):
+                raise RuntimeError("Short inventory requires explicitly monitored events")
             pair_keys, short_inventory_by_contract = (
                 await self._inventory.prepare(
                     config.short_market_keys,
@@ -858,8 +798,6 @@ class ArbitrageRuntime:
                 collateral_by_venue=collateral_by_venue,
             ),
         )
-        if self._market_workers is not None:
-            self._market_workers.resume_execution_handoff()
         collateral_refresh = asyncio.create_task(
             self._safety.refresh_collateral_periodically(
                 collateral_refresh_seconds,
@@ -878,12 +816,6 @@ class ArbitrageRuntime:
         assert self._feed is not None
         feed_failed = asyncio.create_task(self._feed.wait_until_failed())
         waiters = [stop, completed, failed, feed_failed, collateral_refresh]
-        workers_failed = None
-        if self._market_workers is not None and self._market_workers.enabled:
-            workers_failed = asyncio.create_task(
-                self._market_workers.wait_until_failed(),
-            )
-            waiters.append(workers_failed)
         if health_monitor is not None:
             waiters.append(health_monitor)
         done, pending = await asyncio.wait(
@@ -915,30 +847,9 @@ class ArbitrageRuntime:
             raise RuntimeError(str(self.pipeline.error))
         if feed_failed in done and self._feed.error is not None:
             raise RuntimeError(str(self._feed.error))
-        if (
-            workers_failed is not None
-            and workers_failed in done
-            and self._market_workers is not None
-            and self._market_workers.error is not None
-        ):
-            raise RuntimeError(str(self._market_workers.error))
         if self.state is not None and self.state.last_error:
             raise RuntimeError(self.state.last_error)
 
-    def _apply_worker_tick_size(
-        self, venue_id: VenueID, contract_id: ContractID, tick_size: TickSize,
-    ) -> None:
-        """Synchronize worker stream metadata locally before later IPC intents."""
-        if self._feed is None:
-            raise RuntimeError("Arbitrage runtime is not initialized")
-        self._feed.apply_tick_size(venue_id, contract_id, tick_size)
-
-    async def _prepare_worker_matches(self, event: MarketMatchesUpdated) -> None:
-        """Warm authoritative adapters outside worker IPC consumption."""
-        if self._feed is None or self._inventory is None:
-            raise RuntimeError("Arbitrage runtime is not initialized")
-        await self._feed.prepare_matches(event)
-        await self._inventory.refresh(event)
 
     async def _ensure_execution(self) -> None:
         assert self.pipeline is not None
@@ -1003,13 +914,6 @@ class ArbitrageRuntime:
             )
             assert self._feed is not None
             await self._feed.configure_execution(self._execution, self._updates)
-            if self._market_workers is not None and self.state is not None:
-                for cycle in self._market_workers.monitored_cycles:
-                    pairs = self.state.matches.get(cycle, ())
-                    if pairs:
-                        await self._feed.prepare_matches(
-                            MarketMatchesUpdated(cycle, pairs),
-                        )
         if not self._recovered:
             if self._persistence is None:
                 raise RuntimeError("Arbitrage runtime is not initialized")

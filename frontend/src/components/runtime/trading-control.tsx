@@ -19,8 +19,6 @@ import type { SignalSettings } from "@/types/runtime"
 import type { TradingRunSettings } from "@/types/trading"
 
 const DEFAULT_SETTINGS: TradingRunSettings = {
-  underlyings: [],
-  intervals_seconds: [],
   max_arbitrages: 1,
   max_concurrent_arbitrages: 1,
   polymarket_max_notional: 1,
@@ -80,8 +78,6 @@ export function TradingControl({
     controller.run?.status === "stopping"
   const error = controller.error ?? controller.run?.error
   const settings = {
-    underlyings: DEFAULT_SETTINGS.underlyings,
-    intervals_seconds: DEFAULT_SETTINGS.intervals_seconds,
     max_arbitrages: Number(maxArbitrages),
     max_concurrent_arbitrages: Number(maxConcurrentArbitrages),
     polymarket_max_notional: Number(polymarketMax),
@@ -151,7 +147,7 @@ export function TradingControl({
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable live trading?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  The worker will stop gracefully. Existing recovery work is
+                  The runtime will stop gracefully. Existing recovery work is
                   allowed to finish before the run stops.
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -184,10 +180,10 @@ export function TradingControl({
               <AlertDialogHeader>
                 <AlertDialogTitle>Enable live trading?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This starts the execution worker and can place real orders
+                  This starts trading and can place real orders
                   with real funds. Each venue amount is a maximum per arbitrage;
                   both legs always use the same share quantity. This event
-                  workspace never submits recurring crypto markets.
+                  workspace trades only explicitly selected events.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <section

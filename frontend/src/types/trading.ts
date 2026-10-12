@@ -21,8 +21,6 @@ export interface TradingSession {
 
 export interface TradingRunSettings {
   allow_degraded_venues?: boolean
-  underlyings: string[]
-  intervals_seconds: number[]
   max_arbitrages: number
   max_concurrent_arbitrages: number
   polymarket_max_notional: number

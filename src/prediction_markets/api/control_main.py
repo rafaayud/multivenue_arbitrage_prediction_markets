@@ -17,7 +17,6 @@ from prediction_markets.api.routers import (
     alertmanager_webhook,
     alerting,
     candidates,
-    matches,
     system,
     trading_activity,
 )
@@ -102,6 +101,5 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(alertmanager_webhook.router)
 app.include_router(alerting.router)
 app.include_router(candidates.query_router)
-app.include_router(matches.router)
 app.include_router(system.public_router)
 app.include_router(trading_activity.query_router)

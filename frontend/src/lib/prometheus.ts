@@ -20,10 +20,6 @@ const histogramMetrics = new Set([
   "market_feed_venue_age_seconds",
   "market_feed_ws_message_queue_wait_seconds",
   "trading_event_loop_lag_seconds",
-  "market_worker_event_loop_lag_seconds",
-  "market_worker_intent_ipc_seconds",
-  "market_worker_validation_round_trip_seconds",
-  "market_worker_book_age_seconds",
 ])
 
 const criticalStages = [
@@ -419,45 +415,7 @@ export function pipelineMetrics(
         sample.metric === metric &&
         normalizedVenue(sample.labels.venue) === venue,
     )?.value ?? null
-  const workerPartitions = new Set(
-    samples
-      .filter((sample) => sample.metric === "market_worker_up")
-      .map((sample) => sample.labels.partition)
-      .filter((partition): partition is string => Boolean(partition)),
-  )
-  const workerSample = (metric: string, partition: string) =>
-    samples.find(
-      (sample) =>
-        sample.metric === metric && sample.labels.partition === partition,
-    )?.value ?? null
-  const workerCounter = (
-    metric: string,
-    partition: string,
-    predicate: (labels: Record<string, string>) => boolean = () => true,
-  ) =>
-    samples
-      .filter(
-        (sample) =>
-          sample.metric === metric &&
-          sample.labels.partition === partition &&
-          predicate(sample.labels),
-      )
-      .reduce((total, sample) => total + sample.value, 0)
-  const workerP95 = (
-    metric: string,
-    partition: string,
-    predicate: (labels: Record<string, string>) => boolean = () => true,
-  ) =>
-    maximum(
-      summaries
-        .filter(
-          (summary) =>
-            summary.metric === metric &&
-            summary.labels.partition === partition &&
-            predicate(summary.labels),
-        )
-        .map((summary) => summary.p95),
-    )
+
   const captureSummary = (producer: string): FillCaptureSummary => {
     const value = (metric: string) => samples.find((sample) =>
       sample.metric === `predict_fill_capture_${metric}` &&
@@ -654,124 +612,6 @@ export function pipelineMetrics(
         venue,
       ),
     })),
-    workerIpc: {
-      depth: sampleValue("market_worker_ipc_queue_depth"),
-      capacity: sampleValue("market_worker_ipc_queue_capacity"),
-      highWatermark: sampleValue("market_worker_ipc_queue_high_watermark"),
-    },
-    marketWorkers: [...workerPartitions].sort().map((partition) => {
-      const workerVenues = new Set(
-        [
-          ...samples
-            .filter(
-              (sample) =>
-                sample.labels.partition === partition &&
-                [
-                  "market_worker_ws_queue_depth_frames",
-                  "market_worker_ws_queue_high_watermark_frames",
-                  "market_worker_ws_paused_streams",
-                  "market_worker_ws_queue_wait_max_seconds",
-                  "market_worker_timing_seconds",
-                ].includes(sample.metric),
-            )
-            .map((sample) => normalizedVenue(sample.labels.venue)),
-        ].filter((venue): venue is string => Boolean(venue)),
-      )
-      const venueSample = (metric: string, venue: string, stage?: string) =>
-        samples.find(
-          (sample) =>
-            sample.metric === metric &&
-            sample.labels.partition === partition &&
-            normalizedVenue(sample.labels.venue) === venue &&
-            (stage === undefined || sample.labels.stage === stage),
-        )?.value ?? null
-      const validationResults = samples.filter((sample) =>
-        sample.metric === "market_worker_validation_results_total" &&
-        sample.labels.partition === partition,
-      )
-      return {
-        partition,
-        alive: (workerSample("market_worker_up", partition) ?? 0) > 0,
-        heartbeatAge: workerSample(
-          "market_worker_heartbeat_age_seconds",
-          partition,
-        ),
-        pid: workerSample("market_worker_pid", partition),
-        generation: workerSample("market_worker_generation", partition),
-        starts: workerCounter("market_worker_starts_total", partition),
-        restarts: workerCounter("market_worker_restarts_total", partition),
-        unexpectedExits: workerCounter(
-          "market_worker_unexpected_exits_total",
-          partition,
-        ),
-        cpuSeconds: workerSample("market_worker_cpu_seconds", partition),
-        memoryBytes: workerSample("market_worker_memory_bytes", partition),
-        eventLoopLagP95: workerP95(
-          "market_worker_event_loop_lag_seconds",
-          partition,
-        ),
-        intentIpcP95: workerP95(
-          "market_worker_intent_ipc_seconds",
-          partition,
-        ),
-        validationP95: workerP95("market_worker_validation_round_trip_seconds", partition),
-        validationQueueDepth: workerSample("market_worker_validation_queue_depth", partition),
-        validationQueueCapacity: workerSample("market_worker_validation_queue_capacity", partition),
-        validationOutcomes: validationResults.length ? validationResults
-          .filter((sample) => sample.value > 0)
-          .map((sample) => ({ outcome: sample.labels.outcome ?? "unknown", count: sample.value }))
-          .sort((left, right) => right.count - left.count) : null,
-        capture: captureSummary(partition),
-        rejectedIntents: workerCounter(
-          "market_worker_intents_rejected_total",
-          partition,
-        ),
-        submissionSourceAgeP95: workerP95(
-          "market_worker_book_age_seconds",
-          partition,
-          (labels) =>
-            labels.stage === "submission" && labels.clock === "source",
-        ),
-        shadowAgreements: workerCounter(
-          "market_worker_shadow_detections_total",
-          partition,
-          (labels) => labels.outcome === "agree",
-        ),
-        shadowDisagreements: workerCounter(
-          "market_worker_shadow_detections_total",
-          partition,
-          (labels) => labels.outcome === "disagree",
-        ),
-        venues: [...workerVenues].sort().map((venue) => ({
-          venue: venue.charAt(0).toUpperCase() + venue.slice(1),
-          queueDepth: venueSample(
-            "market_worker_ws_queue_depth_frames",
-            venue,
-          ),
-          queueHighWatermark: venueSample(
-            "market_worker_ws_queue_high_watermark_frames",
-            venue,
-          ),
-          pausedStreams: venueSample(
-            "market_worker_ws_paused_streams",
-            venue,
-          ),
-          queueWaitMax: venueSample(
-            "market_worker_ws_queue_wait_max_seconds",
-            venue,
-          ),
-          sourceToTransportMax: venueSample(
-            "market_worker_timing_seconds",
-            venue,
-            "source_to_transport_max",
-          ),
-          transportToSinkMax: venueSample(
-            "market_worker_timing_seconds",
-            venue,
-            "transport_to_sink_max",
-          ),
-        })),
-      }
-    }),
+
   }
 }

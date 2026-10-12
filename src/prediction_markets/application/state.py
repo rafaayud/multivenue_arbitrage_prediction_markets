@@ -22,7 +22,6 @@ from prediction_markets.application.events import (
     InventoryOperationRecorded,
     MarketSettlementRecorded,
     MarketMatchesUpdated,
-    OpportunityValidationRef,
     OrderBookPairUpdated,
     OrderBookUpdated,
     OrderPrepared,
@@ -114,12 +113,6 @@ class TradingState:
     recoveries: dict[str, ExposureRecovery] = field(default_factory=dict)
     execution_pairs: dict[str, tuple[str, str]] = field(default_factory=dict)
     execution_cycles: dict[str, MonitoredMarket] = field(default_factory=dict)
-    opportunity_worker_refs: dict[str, OpportunityValidationRef] = field(
-        default_factory=dict,
-    )
-    execution_worker_refs: dict[str, OpportunityValidationRef] = field(
-        default_factory=dict,
-    )
     timings: dict[str, ExecutionTimings] = field(default_factory=dict)
     commands: dict[ClientOrderID, SubmitOrder] = field(default_factory=dict)
     prepared: dict[ClientOrderID, PreparedOrder] = field(default_factory=dict)
@@ -221,8 +214,6 @@ class TradingState:
             return
         if isinstance(event, ArbitrageOpportunityFound):
             if event.id in self._opportunity_ids:
-                if event.validation_ref is not None:
-                    self.opportunity_worker_refs[event.id] = event.validation_ref
                 return
             if (
                 self.opportunities.maxlen is not None
@@ -230,19 +221,13 @@ class TradingState:
             ):
                 expired_id = self.opportunities[0].id
                 self._opportunity_ids.discard(expired_id)
-                self.opportunity_worker_refs.pop(expired_id, None)
             self.opportunities.append(event)
             self._opportunity_ids.add(event.id)
-            if event.validation_ref is not None:
-                self.opportunity_worker_refs[event.id] = event.validation_ref
             return
         if isinstance(event, ArbitragePlanned):
             self.executions[event.execution.id] = event.execution
             self.execution_pairs[event.execution.id] = event.pair.key
             self.execution_cycles[event.execution.id] = event.cycle
-            worker_ref = self.opportunity_worker_refs.get(event.opportunity_id)
-            if worker_ref is not None:
-                self.execution_worker_refs[event.execution.id] = worker_ref
             return
         if isinstance(event, SubmitOrder):
             client_order_id = event.intent.client_order_id

@@ -37,20 +37,19 @@ function opportunity(
 }
 
 describe("filterOpportunities", () => {
-  test("combines underlying, interval and side filters", () => {
+  test("filters long and short opportunities", () => {
     const opportunities = [
       opportunity("BTC", 300, "LONG"),
       opportunity("BTC", 900, "SHORT"),
       opportunity("ETH", 300, "LONG"),
     ]
     const filters: ArbitrageFilters = {
-      underlying: "BTC",
-      interval: 300,
       side: "LONG",
     }
 
     expect(filterOpportunities(opportunities, filters).map(({ id }) => id)).toEqual([
       "BTC:300:LONG",
+      "ETH:300:LONG",
     ])
   })
 })

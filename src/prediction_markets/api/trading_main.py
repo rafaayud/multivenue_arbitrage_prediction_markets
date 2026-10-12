@@ -69,7 +69,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with ArbitrageRuntime(
             venue_health_service=venue_health_service,
         ) as runtime:
-            app.state.market_matcher = runtime.market_matcher
             app.state.market_worker = runtime
             app.state.arbitrage_runtime = runtime
             app.state.execution_runs = runtime.execution_runs

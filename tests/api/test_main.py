@@ -41,12 +41,13 @@ def test_trading_lifespan_builds_event_driven_runtime() -> None:
 def test_control_and_trading_apps_partition_process_owned_routes() -> None:
     """Keep queries outside trading and mutations beside their runtime owner."""
     control_paths = _route_paths(control_app)
+    assert "/market-matches" not in control_paths
+    assert "/market-matches/all" not in control_paths
     trading_paths = _route_paths(trading_app)
 
     assert {
         "/arbitrage-candidates",
         "/market-catalog",
-        "/market-matches",
         "/arbitrage-opportunities",
         "/orders",
         "/pnl",

@@ -62,14 +62,6 @@ class ExecutionTimings:
         First positive fill recognized by leg.
     terminal_at_ns
         Terminal order result recognized by leg.
-    worker_validation_ns
-        Cumulative local time awaiting worker validation, including failed checks.
-    worker_validation_count
-        Number of worker checks made for this execution.
-    worker_reprices
-        Number of bounded in-memory replans before the durable batch.
-    worker_reprepare_ns
-        Additional signing time after a worker requested a new price.
     entry_pricing
         Initial and bounded reprice decisions, including mode, limits, edge,
         and local computation time. These intervals overlap existing stages.
@@ -79,8 +71,6 @@ class ExecutionTimings:
     - Values use ``time.monotonic_ns()``, not wall-clock time.
     - Duplicate marks are ignored so replayed or repeated snapshots do not
       duplicate histogram observations.
-    - Worker checks and replacement signing are subsets of elapsed pre-submission
-      time, not additive stages. Original preparation marks remain available.
     """
 
     opportunity_at_ns: int | None = None
@@ -103,10 +93,6 @@ class ExecutionTimings:
     ack_at_ns: dict[Leg, int] = field(default_factory=dict)
     first_fill_at_ns: dict[Leg, int] = field(default_factory=dict)
     terminal_at_ns: dict[Leg, int] = field(default_factory=dict)
-    worker_validation_ns: int = 0
-    worker_validation_count: int = 0
-    worker_reprices: int = 0
-    worker_reprepare_ns: int = 0
     entry_pricing: tuple[dict[str, object], ...] = ()
 
     def mark_entry_pricing(
@@ -355,12 +341,6 @@ class ExecutionTimings:
             "error": self.guard_error,
             "older_book_role": older_book_role,
             "stages": {
-                **({
-                    "worker_validation_ms": self.worker_validation_ns / 1_000_000,
-                    "worker_validation_count": self.worker_validation_count,
-                    "worker_reprices": self.worker_reprices,
-                    "worker_reprepare_ms": self.worker_reprepare_ns / 1_000_000,
-                } if self.worker_validation_count else {}),
                 "book_arrival_skew_ms": (
                     self._milliseconds(min(book_times), max(book_times))
                     if len(book_times) == 2

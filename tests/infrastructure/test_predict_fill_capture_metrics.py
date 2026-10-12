@@ -1,16 +1,9 @@
-"""Verify bounded capture metrics and generation-aware worker summary forwarding."""
+"""Verify bounded capture metrics and producer labels."""
 
-import asyncio
 import math
-import queue
-from dataclasses import replace
-from decimal import Decimal
-from types import SimpleNamespace
 
-import pytest
 from prometheus_client import REGISTRY
 
-from prediction_markets.api.runtime import market_workers as workers
 from prediction_markets.infrastructure import operational_metrics as metrics
 
 
@@ -53,58 +46,3 @@ def test_capture_metrics_do_not_create_labels_from_run_or_unknown_producer_ids()
     assert sum(sample.value for sample in samples if sample.labels["producer"] == "unknown") == 1
     for name in ("bytes", "queue_depth", "writer_progress_age_seconds"):
         assert math.isnan(REGISTRY.get_sample_value(f"predict_fill_capture_{name}", {"producer": "unknown"}))
-
-
-def test_worker_capture_observation_occurs_once_per_summary_outside_telemetry_lock(monkeypatch):
-    """Keep capture sampling off book callbacks and reuse the existing aggregate IPC path."""
-    output = queue.Queue()
-    telemetry = workers._WorkerTelemetry("crypto-slow", "generation", output)
-    calls = []
-
-    def capture():
-        assert telemetry._lock.acquire(blocking=False)
-        telemetry._lock.release()
-        calls.append(1)
-        return _capture()
-
-    monkeypatch.setattr(workers, "capture_status", capture)
-    for _ in range(100):
-        telemetry.record_drop("events")
-    assert calls == []
-    assert output.empty()
-    summary = telemetry.snapshot((0.01,), queue.Queue())
-    assert calls == [1]
-    assert summary.capture == _capture()
-    assert summary.enqueue_drops == (("events", "full", 100),)
-    assert output.empty()
-    assert workers.WorkerRuntimeSummary("crypto-slow", "old", (), 0, None, None, (), (), ()).capture is None
-
-
-def test_parent_forwards_capture_only_from_current_worker_generation(monkeypatch):
-    """Reject stale summaries before updating capture metrics or runtime status."""
-    async def scenario():
-        partition = workers.market_worker_partitions(enabled_names=("crypto-slow",))[0]
-        supervisor = workers.MarketWorkerSupervisor(SimpleNamespace(), min_net_edge=Decimal("0"),
-            cost_buffer=Decimal("0"), mode="active", partitions=(partition,))
-        supervisor._metrics_queue = object()
-        supervisor._process_generations[partition.name] = "current"
-        summary = workers.WorkerRuntimeSummary(partition.name, "current", (), 0, None, None,
-            (), (), (), _capture("disk_limit"))
-        pending = [replace(summary, process_generation="old", capture=_capture()), summary,
-            replace(summary, process_generation="old", capture=_capture("io_error"))]
-        observations = []
-
-        def dequeue(source):
-            if pending:
-                return pending.pop(0)
-            raise asyncio.CancelledError
-
-        monkeypatch.setattr(workers, "_queue_get", dequeue)
-        monkeypatch.setattr(workers, "update_predict_fill_capture_metrics",
-            lambda producer, capture: observations.append((producer, capture)))
-        with pytest.raises(asyncio.CancelledError):
-            await supervisor._consume_metrics()
-        assert observations == [(partition.name, summary.capture)]
-        assert supervisor.status()[0]["capture"] == summary.capture
-
-    asyncio.run(scenario())

@@ -1,16 +1,15 @@
 """Verify real dispatch checkpoints survive bounded capture and offline analysis."""
 
 import asyncio
-import time
 from dataclasses import replace
 
 import pytest
 
 from prediction_markets.domain.shared.value_objects import ClientOrderID, ContractID, VenueID
 from prediction_markets.infrastructure.observability import predict_fill_study as study
-from tests.api.test_market_workers import _book, _pair
-from tests.application import test_worker_dispatch_validation as dispatch_fixtures
-from tests.application.test_worker_dispatch_validation import Reason, _reply, _SignedExecution
+from tests.application.test_dispatch_preparation import _book, _pair
+from tests.application import test_dispatch_preparation as dispatch_fixtures
+from tests.application.test_dispatch_preparation import _SignedExecution
 
 analysis = pytest.importorskip("repo_tools.predict_fill_analysis")
 
@@ -74,69 +73,6 @@ def _assert_checkpoint_ages(checkpoint, book):
         (checkpoint["captured_mono_ns"] - local) / 1_000_000)
 
 
-def test_final_worker_book_reaches_guard_report_after_preparation_mutation(tmp_path, monkeypatch):
-    """A real two-check dispatch reports the last validated books, not its signed-plan books."""
-    async def run():
-        root = tmp_path / "capture"
-        recorder = study.FillStudyRecorder(root, "parent", capture_mode="trades")
-        monkeypatch.setattr(study, "_recorder", recorder)
-        engine, staged, journal, _, dispatcher, adapters = _stage_predict(tmp_path, monkeypatch)
-        responses = []
-
-        async def validate(request):
-            index = len(responses) + 1
-            response = _reply(request, Reason.ACCEPTED,
-                right_price="0.48" if index == 1 else "0.46",
-                left_price="0.39" if index == 1 else "0.38")
-            mono, wall = time.monotonic_ns(), time.time_ns()
-            response = replace(response,
-                left_order_book=replace(response.left_order_book,
-                    source_hash=f"left-check-{index}"),
-                right_order_book=replace(response.right_order_book,
-                    source_hash=f"predict-check-{index}", source_at_ns=wall - 200_000_000,
-                    arrival_wall_at_ns=wall, arrival_at_ns=mono, received_at_ns=mono),
-                right_book_generation=f"predict-generation-{index}")
-            responses.append(response)
-            return response
-
-        dispatcher.set_worker_validation(validate)
-        try:
-            await dispatcher._dispatch_prepared_execution(staged)
-            assert len(responses) == 2
-            assert all(len(adapter.submitted) == 1 for adapter in adapters.values())
-        finally:
-            await dispatcher.close()
-            journal.close()
-            recorder.close()
-
-        rows, incomplete = analysis.read_capture(recorder.path)
-        assert incomplete is False
-        assert recorder.status()["counts"].get("dropped", 0) == 0
-        order = next(order for order in analysis.analyze(root)["orders"] if order["venue"] == "PREDICT")
-        checkpoints = {item["phase"]: item for item in order["features"]["book_checkpoints"]}
-        assert set(checkpoints) >= {"validation_preparation", "validation_final", "guard", "submission"}
-        for index, phase in enumerate(("validation_preparation", "validation_final")):
-            checkpoint = checkpoints[phase]
-            assert checkpoint["request_id"] == responses[index].request.request_id
-            assert checkpoint["book_generation"] == f"predict-generation-{index + 1}"
-            assert checkpoint["book"]["source_hash"] == f"predict-check-{index + 1}"
-            _assert_checkpoint_ages(checkpoint, responses[index].right_order_book)
-        for phase in ("guard", "submission"):
-            assert checkpoints[phase]["book"]["asks"][0][0] == "0.46"
-            _assert_checkpoint_ages(checkpoints[phase], responses[-1].right_order_book)
-        feature = order["features"]
-        assert feature["decision_snapshot"]["phase"] == "guard"
-        assert feature["decision_snapshot"]["book"]["source_hash"] == "predict-check-2"
-        assert feature["predict_source_age_ms"] == pytest.approx(checkpoints["guard"]["source_age_ms"])
-        assert feature["predict_local_age_ms"] == pytest.approx(checkpoints["guard"]["local_age_ms"])
-        initial = next(row for row in rows if row["kind"] == "decision"
-            and row["data"]["venue"] == "PREDICT")
-        assert initial["data"]["levels"][0][0] == "0.5"
-        assert engine.state.books[staged.opportunity.pair.right.id].source_hash == "predict-check-2"
-
-    asyncio.run(run())
-
-
 @pytest.mark.parametrize("origin,known_source", [("in_memory", True), ("rest_snapshot", True), ("rest_snapshot", False)])
 def test_recovery_capture_preserves_age_or_explicit_unknown_without_extra_io(
     tmp_path, monkeypatch, origin, known_source,
@@ -184,5 +120,40 @@ def test_recovery_capture_preserves_age_or_explicit_unknown_without_extra_io(
         if not known_source:
             assert checkpoint["local_clock_basis"] == "adapter_received"
         assert recorder.status()["counts"].get("observer_errors", 0) == 0
+
+    asyncio.run(run())
+
+
+def test_guard_capture_reads_a_local_update_received_during_signing(tmp_path, monkeypatch):
+    """Retain the latest local book and its clocks at guard and submission."""
+    async def run():
+        root = tmp_path / "capture"
+        recorder = study.FillStudyRecorder(root, "parent", capture_mode="trades")
+        monkeypatch.setattr(study, "_recorder", recorder)
+        engine, staged, journal, _, dispatcher, adapters = _stage_predict(tmp_path, monkeypatch)
+        contract = staged.opportunity.pair.right
+        latest = replace(_book(contract, "0.48"), source_hash="during-signing")
+        adapter = adapters[contract.venue_id]
+        prepare = adapter.prepare
+
+        def prepare_and_update(intent):
+            result = prepare(intent)
+            engine.state.books[contract.id] = latest
+            return result
+
+        monkeypatch.setattr(adapter, "prepare", prepare_and_update)
+        try:
+            await dispatcher._dispatch_prepared_execution(staged)
+            assert all(len(value.submitted) == 1 for value in adapters.values())
+        finally:
+            await dispatcher.close()
+            journal.close()
+            recorder.close()
+        order = next(value for value in analysis.analyze(root)["orders"] if value["venue"] == "PREDICT")
+        checkpoints = {value["phase"]: value for value in order["features"]["book_checkpoints"]}
+        for phase in ("guard", "submission"):
+            assert checkpoints[phase]["book"]["source_hash"] == "during-signing"
+            _assert_checkpoint_ages(checkpoints[phase], latest)
+        assert order["features"]["decision_snapshot"]["phase"] == "guard"
 
     asyncio.run(run())

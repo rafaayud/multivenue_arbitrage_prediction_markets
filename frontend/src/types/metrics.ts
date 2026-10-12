@@ -96,43 +96,6 @@ export interface MarketFeedSummary {
   wsQueueWaitP95: number | null
 }
 
-/** Worker-owned WebSocket pressure aggregated once per second. */
-export interface MarketWorkerVenueSummary {
-  venue: string
-  queueDepth: number | null
-  queueHighWatermark: number | null
-  pausedStreams: number | null
-  queueWaitMax: number | null
-  sourceToTransportMax: number | null
-  transportToSinkMax: number | null
-}
-
-/** Health and IPC telemetry for one process partition. */
-export interface MarketWorkerSummary {
-  partition: string
-  alive: boolean
-  heartbeatAge: number | null
-  pid: number | null
-  generation: number | null
-  starts: number
-  restarts: number
-  unexpectedExits: number
-  cpuSeconds: number | null
-  memoryBytes: number | null
-  eventLoopLagP95: number | null
-  intentIpcP95: number | null
-  validationP95: number | null
-  validationQueueDepth: number | null
-  validationQueueCapacity: number | null
-  validationOutcomes: Array<{ outcome: string; count: number }> | null
-  capture: FillCaptureSummary
-  rejectedIntents: number
-  submissionSourceAgeP95: number | null
-  shadowAgreements: number
-  shadowDisagreements: number
-  venues: MarketWorkerVenueSummary[]
-}
-
 /** Optional capture health; missing metrics remain unknown rather than healthy. */
 export interface FillCaptureSummary {
   state: string
@@ -144,13 +107,6 @@ export interface FillCaptureSummary {
   activeWindows: number | null
   writerAlive: boolean | null
   writerProgressAge: number | null
-}
-
-/** Shared bounded opportunity-intent queue pressure. */
-export interface MarketWorkerIpcSummary {
-  depth: number | null
-  capacity: number | null
-  highWatermark: number | null
 }
 
 /** Pipeline diagnostics derived from the existing Prometheus endpoint. */
@@ -166,7 +122,6 @@ export interface PipelineMetrics {
   polymarketWs: PolymarketWsSummary
   eventLoopLagP95: number | null
   marketFeeds: MarketFeedSummary[]
-  workerIpc: MarketWorkerIpcSummary
-  marketWorkers: MarketWorkerSummary[]
+
   parentCapture: FillCaptureSummary
 }

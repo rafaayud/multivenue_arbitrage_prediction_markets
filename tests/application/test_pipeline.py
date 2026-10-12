@@ -16,7 +16,6 @@ from prediction_markets.application.engine import EngineConfig, TradingEngine
 from prediction_markets.application.events import (
     ArbitrageOpportunityFound,
     ArbitragePlanned,
-    OpportunityValidationRef,
     OrderPrepared,
     OrderSnapshotUpdated,
     PreparedExecutionBatch,
@@ -890,13 +889,13 @@ def test_output_dispatcher_submits_two_commands_concurrently(
     asyncio.run(run())
 
 
-def test_worker_routed_pair_cannot_bypass_stale_parent_book_guard(
+def test_pair_cannot_bypass_stale_local_book_guard(
     tmp_path,
 ) -> None:
-    """Apply the same local guard to worker and parent feed executions."""
+    """Reject submission when either locally cached book is stale."""
 
     async def run() -> None:
-        journal = BinaryJournal(tmp_path / "worker-guard.log")
+        journal = BinaryJournal(tmp_path / "local-guard.log")
         inputs = RingBuffer(2)
         state = TradingState()
         left_venue, right_venue = VenueID("left"), VenueID("right")
@@ -911,16 +910,8 @@ def test_worker_routed_pair_cannot_bypass_stale_parent_book_guard(
         state.matches[cycle] = (pair,)
         state.execution_cycles["execution-1"] = cycle
         state.execution_pairs["execution-1"] = pair.key
-        state.execution_worker_refs["execution-1"] = OpportunityValidationRef(
-            "generation:1",
-            "btc-5m",
-            "generation",
-            1,
-            "left-generation",
-            "right-generation",
-        )
         now_ns = time.monotonic_ns()
-        stale_ns = now_ns - 121 * 1_000_000
+        stale_ns = now_ns - 1_000 * 1_000_000
         state.books[left_contract.id] = _live_book("0.4", stale_ns)
         state.books[right_contract.id] = _live_book("0.4", stale_ns)
         dispatcher = OutputDispatcher(RingBuffer(2), EventSink(inputs), journal, state)

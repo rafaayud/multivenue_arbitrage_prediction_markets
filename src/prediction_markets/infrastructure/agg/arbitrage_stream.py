@@ -7,6 +7,7 @@ Responsibilities
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -32,7 +33,6 @@ from prediction_markets.domain.shared.value_objects import (
     VenueID,
 )
 from prediction_markets.infrastructure.http_client import instrumented_async_client
-from prediction_markets.infrastructure.agg.instrument_discovery import binary_outcomes
 
 
 class AggArbitrageStreamAdapter(ArbitrageStreamPort):
@@ -546,3 +546,29 @@ def _event_topics_match(
     return not categories.isdisjoint(topics) and not (
         set(topics) == {"sports"} and "esports" in categories
     )
+
+
+_YES_LABELS = {"yes", "up", "higher", "above", "true", "1"}
+_NO_LABELS = {"no", "down", "lower", "below", "false", "0"}
+
+
+def binary_outcomes(
+    outcomes: tuple[dict[str, Any], ...],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Resolve unique YES and NO outcome identifiers from an external market payload.
+
+    Returns
+    -------
+    tuple[dict, dict] or None
+        The YES payload followed by the NO payload, or ``None`` when the
+        payload does not contain exactly two recognizable binary outcomes.
+    """
+    if len(outcomes) != 2:
+        return None
+    yes = next((outcome for outcome in outcomes if _label(outcome) in _YES_LABELS), None)
+    no = next((outcome for outcome in outcomes if _label(outcome) in _NO_LABELS), None)
+    return (yes, no) if yes is not None and no is not None else None
+
+
+def _label(outcome: dict[str, Any]) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(outcome.get("label") or "").lower())

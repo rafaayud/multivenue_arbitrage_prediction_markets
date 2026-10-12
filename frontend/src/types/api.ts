@@ -17,14 +17,6 @@ export interface MarketMatchPair {
   right: ContractMatch
 }
 
-export interface MarketMatchesResponse {
-  monitor_key: string
-  family: "crypto" | "finance"
-  underlying: Underlying
-  interval_seconds: IntervalSeconds
-  pairs: MarketMatchPair[]
-}
-
 export interface ApiFailure {
   status: number
   detail: string

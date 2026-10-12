@@ -270,12 +270,9 @@ export function PipelineMetricsPage({
     metrics.pipeline.latencies,
     "trading_event_loop_lag_seconds",
   )
-  const marketWorkers =
-    runtime.runtime?.market_worker_mode === "disabled"
-      ? []
-      : metrics.pipeline.marketWorkers
+
   const parentCapture = metrics.pipeline.parentCapture
-  const aliveWorkers = marketWorkers.filter((worker) => worker.alive).length
+
   const polymarketWsUnhealthy =
     (polymarketWs.activeSockets !== null &&
       polymarketWs.expectedSockets !== null &&
@@ -367,7 +364,7 @@ export function PipelineMetricsPage({
       <details className="diagnostic-details mt-6 rounded-2xl border border-border bg-card">
         <summary>
           {view === "pipeline"
-            ? "Advanced diagnostics: sockets, workers & capture"
+            ? "Advanced diagnostics: sockets & capture"
             : "Detailed measurements: percentiles, checkpoints & failures"}
         </summary>
         <div className="px-4 pb-4 sm:px-5">
@@ -493,40 +490,7 @@ export function PipelineMetricsPage({
               </section>
 
               <section className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <StatusCard
-                  label="Market-data workers"
-                  value={
-                    marketWorkers.length
-                      ? `${aliveWorkers}/${marketWorkers.length}`
-                      : "Disabled"
-                  }
-                  detail="Isolated public feeds and local detection"
-                  icon={Activity}
-                  tone={
-                    marketWorkers.length &&
-                    aliveWorkers !== marketWorkers.length
-                      ? "negative"
-                      : "neutral"
-                  }
-                />
-                <StatusCard
-                  label="Opportunity IPC queue"
-                  value={
-                    metrics.pipeline.workerIpc.depth === null
-                      ? "—"
-                      : `${metrics.pipeline.workerIpc.depth}/${metrics.pipeline.workerIpc.capacity ?? "—"}`
-                  }
-                  detail={`Sampled peak ${metrics.pipeline.workerIpc.highWatermark ?? "—"}`}
-                  icon={Send}
-                  tone={
-                    metrics.pipeline.workerIpc.depth !== null &&
-                    metrics.pipeline.workerIpc.capacity !== null &&
-                    metrics.pipeline.workerIpc.depth >=
-                      metrics.pipeline.workerIpc.capacity * 0.75
-                      ? "negative"
-                      : "neutral"
-                  }
-                />
+
                 <StatusCard
                   label="Predict capture · parent"
                   value={
@@ -538,167 +502,6 @@ export function PipelineMetricsPage({
                 />
               </section>
 
-              <section className="mt-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Worker and IPC telemetry</CardTitle>
-                    <CardDescription>
-                      One-second child aggregates plus immediate pause,
-                      overload, and resync transitions. Deployment values remain
-                      provisional until verified in the rebuilt container.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="px-2 sm:px-5">
-                    {!marketWorkers.length ? (
-                      <p className="py-6 text-center text-sm text-muted-foreground">
-                        Multiprocessing is disabled or no worker samples have
-                        arrived.
-                      </p>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Partition</TableHead>
-                            <TableHead>Process</TableHead>
-                            <TableHead className="text-right">
-                              Loop p95 / max
-                            </TableHead>
-                            <TableHead className="text-right">
-                              Intent IPC p95 / max
-                            </TableHead>
-                            <TableHead>Final validation</TableHead>
-                            <TableHead className="text-right">
-                              Book source p95 / max
-                            </TableHead>
-                            <TableHead>Capture (last heartbeat)</TableHead>
-                            <TableHead>Pressure</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {marketWorkers.map((worker) => {
-                            const workerLatency = (metric: string) =>
-                              worstLatency(
-                                metrics.pipeline.latencies,
-                                metric,
-                                (summary) =>
-                                  summary.labels.partition === worker.partition,
-                              )
-                            return (
-                              <TableRow key={worker.partition}>
-                                <TableCell className="font-medium">
-                                  {worker.partition}
-                                </TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  {worker.alive ? "up" : "down"} · PID{" "}
-                                  {worker.pid ?? "—"} · gen{" "}
-                                  {worker.generation ?? "—"}
-                                  <br />
-                                  heartbeat {latency(worker.heartbeatAge)} · CPU{" "}
-                                  {worker.cpuSeconds?.toFixed(1) ?? "—"}s ·{" "}
-                                  {memory(worker.memoryBytes)} ·{" "}
-                                  {worker.restarts} restarts
-                                </TableCell>
-                                <TableCell className="numeric text-right font-mono text-xs">
-                                  {latency(worker.eventLoopLagP95)}
-                                  <br />
-                                  <span className="text-muted-foreground">
-                                    {maximumBucket(
-                                      workerLatency(
-                                        "market_worker_event_loop_lag_seconds",
-                                      ),
-                                    )}
-                                  </span>
-                                </TableCell>
-                                <TableCell className="numeric text-right font-mono text-xs">
-                                  {latency(worker.intentIpcP95)}
-                                  <br />
-                                  <span className="text-muted-foreground">
-                                    {maximumBucket(
-                                      workerLatency(
-                                        "market_worker_intent_ipc_seconds",
-                                      ),
-                                    )}{" "}
-                                    max · {worker.rejectedIntents} rejected
-                                  </span>
-                                </TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  p95 {latency(worker.validationP95)} · queue{" "}
-                                  {worker.validationQueueDepth ?? "—"}/
-                                  {worker.validationQueueCapacity ?? "—"}
-                                  <br />
-                                  {worker.validationOutcomes === null
-                                    ? "No validation samples"
-                                    : worker.validationOutcomes
-                                        .map(
-                                          ({ outcome, count }) =>
-                                            `${outcome.replaceAll("_", " ")}: ${count}`,
-                                        )
-                                        .join(" · ") || "No validations"}
-                                </TableCell>
-                                <TableCell className="numeric text-right font-mono text-xs">
-                                  {latency(worker.submissionSourceAgeP95)}
-                                  <br />
-                                  <span className="text-muted-foreground">
-                                    {maximumBucket(
-                                      worstLatency(
-                                        metrics.pipeline.latencies,
-                                        "market_worker_book_age_seconds",
-                                        (summary) =>
-                                          summary.labels.partition ===
-                                            worker.partition &&
-                                          summary.labels.stage ===
-                                            "submission" &&
-                                          summary.labels.clock === "source",
-                                      ),
-                                    )}
-                                  </span>
-                                </TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  <span
-                                    className={
-                                      captureTone(worker.capture) === "negative"
-                                        ? "text-rose-300"
-                                        : captureTone(worker.capture) ===
-                                            "warning"
-                                          ? "text-amber-300"
-                                          : ""
-                                    }
-                                  >
-                                    {metrics.error || !worker.alive
-                                      ? "Unknown"
-                                      : captureLabel(worker.capture)}
-                                  </span>
-                                  <br />
-                                  queue {worker.capture.queueDepth ?? "—"}/
-                                  {worker.capture.queueCapacity ?? "—"} ·{" "}
-                                  {worker.capture.droppedSamples ?? "—"} dropped
-                                  <br />
-                                  {worker.capture.offersAfterStop ?? "—"} after
-                                  stop · {worker.capture.activeWindows ?? "—"}{" "}
-                                  windows · {memory(worker.capture.bytes)}
-                                  <br />
-                                  writer idle{" "}
-                                  {latency(worker.capture.writerProgressAge)}
-                                </TableCell>
-                                <TableCell className="text-xs text-muted-foreground">
-                                  {worker.venues.length
-                                    ? worker.venues
-                                        .map(
-                                          (venue) =>
-                                            `${venue.venue} ${venue.queueDepth ?? "—"}/${venue.queueHighWatermark ?? "—"}, wait max ${latency(venue.queueWaitMax)}${(venue.pausedStreams ?? 0) > 0 ? " paused" : ""}`,
-                                        )
-                                        .join(" · ")
-                                    : "No queue samples"}
-                                </TableCell>
-                              </TableRow>
-                            )
-                          })}
-                        </TableBody>
-                      </Table>
-                    )}
-                  </CardContent>
-                </Card>
-              </section>
             </>
           ) : (
             <>

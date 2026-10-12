@@ -2,7 +2,7 @@
 
 Responsibilities
 ----------------
-- Refresh recurring and explicitly monitored market matches.
+- Refresh explicitly selected event markets.
 - Normalize subscription changes before publishing order books to the pipeline.
 - Warm execution metadata outside the order-submission hot path.
 """
@@ -10,7 +10,7 @@ Responsibilities
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
@@ -18,9 +18,6 @@ from functools import partial
 from prediction_markets.application.events import MarketMatchesUpdated, OrderBookUpdated
 from prediction_markets.application.markets.matching import MarketMatcher
 from prediction_markets.application.markets.models import (
-    MarketCycle,
-    MarketFamily,
-    MonitoredMarket,
     RegularCandidate,
     RegularMarketSelection,
     monitored_market_key,
@@ -29,12 +26,10 @@ from prediction_markets.application.pipeline import TradingPipeline
 from prediction_markets.application.state import TradingState
 from prediction_markets.domain.contracts.entities import BinaryContract
 from prediction_markets.domain.contracts.value_objects import TickSize
-from prediction_markets.domain.market_matching.value_objects import Underlying
 from prediction_markets.domain.ports.execution import ExecutionPort, OrderUpdatePort
 from prediction_markets.domain.ports.market_data_stream import MarketDataStreamPort
 from prediction_markets.domain.ports.taker_fees import TakerFeeCalculatorPort
-from prediction_markets.domain.orderbook.entities import OrderBook
-from prediction_markets.domain.shared.value_objects import ContractID, Timestamp, VenueID
+from prediction_markets.domain.shared.value_objects import ContractID, VenueID
 from prediction_markets.infrastructure.operational_metrics import (
     DISCOVERY_REFRESH_DURATION,
     DISCOVERY_REFRESHES,
@@ -51,18 +46,6 @@ from prediction_markets.infrastructure.operational_metrics import (
 
 _events = logging.getLogger("prediction_markets.events.runtime")
 
-MONITORED_MARKET_CYCLES = {
-    (cycle.underlying, cycle.interval_seconds): cycle
-    for cycle in (
-        MarketCycle(Underlying("BTC"), 3600, MarketFamily.CRYPTO),
-        MarketCycle(Underlying("BTC"), 86400, MarketFamily.CRYPTO),
-        MarketCycle(Underlying("ETH"), 3600, MarketFamily.CRYPTO),
-        MarketCycle(Underlying("ETH"), 86400, MarketFamily.CRYPTO),
-        MarketCycle(Underlying("BNB"), 3600, MarketFamily.CRYPTO),
-        MarketCycle(Underlying("BNB"), 86400, MarketFamily.CRYPTO),
-    )
-}
-
 
 class _MarketFeedCoordinator:
     """Refresh matches and keep one public stream alive per configured venue.
@@ -71,8 +54,7 @@ class _MarketFeedCoordinator:
     -----
     - Venue discovery and subscription refreshes are time-bounded so stalled
       external I/O is cancelled and retried by the next refresh iteration.
-    - Journal recovery cannot restore recurring cycles removed from
-      ``MONITORED_MARKET_CYCLES``.
+    - Journal recovery restores only explicitly selected regular candidates.
     - Cycle callbacks finish before subscriptions expose newly matched contracts.
     """
 
@@ -86,16 +68,6 @@ class _MarketFeedCoordinator:
         *,
         refresh_seconds: float,
         refresh_timeout_seconds: float = 45.0,
-        cycles: tuple[MarketCycle, ...] | None = None,
-        on_cycle_matches: Callable[[MarketMatchesUpdated], Awaitable[None]]
-        | None = None,
-        on_book_published: Callable[
-            [VenueID, OrderBook, int, int],
-            None,
-        ]
-        | None = None,
-        on_tick_size_change: Callable[[VenueID, ContractID, TickSize], None]
-        | None = None,
     ) -> None:
         """Configure discovery, feed ownership, and publication callbacks.
 
@@ -115,15 +87,6 @@ class _MarketFeedCoordinator:
             Delay between discovery refreshes, in seconds.
         refresh_timeout_seconds
             Maximum discovery refresh duration, in seconds.
-        cycles
-            Recurring cycles owned by this coordinator. ``None`` selects all
-            monitored cycles; an empty tuple intentionally selects none.
-        on_cycle_matches
-            Optional async callback completed before matches become actionable.
-        on_book_published
-            Optional non-blocking timing callback invoked after sink publication.
-        on_tick_size_change
-            Optional non-blocking control callback forwarding authoritative ticks.
 
         Raises
         ------
@@ -138,30 +101,13 @@ class _MarketFeedCoordinator:
         self._fees = fees
         self._pipeline = pipeline
         self._state = state
-        self._cycles = (
-            tuple(MONITORED_MARKET_CYCLES.values())
-            if cycles is None
-            else cycles
-        )
         self._refresh_seconds = refresh_seconds
         self._refresh_timeout_seconds = refresh_timeout_seconds
-        self._on_cycle_matches = on_cycle_matches
-        self._on_book_published = on_book_published
-        self._on_tick_size_change = on_tick_size_change
         self._live_tick_sizes: dict[tuple[VenueID, ContractID], TickSize] = {}
-        now = Timestamp.now()
         self._matches = {
             monitored_market_key(market): MarketMatchesUpdated(market, pairs)
             for market, pairs in state.matches.items()
-            if pairs
-            and (
-                isinstance(market, RegularCandidate)
-                or market in self._cycles
-            )
-            and (
-                isinstance(market, RegularCandidate)
-                or any(pair.ends_at > now for pair in pairs)
-            )
+            if pairs and isinstance(market, RegularCandidate)
         }
         self._desired: dict[VenueID, tuple[ContractID, ...]] = {
             venue_id: () for venue_id in streams
@@ -225,19 +171,10 @@ class _MarketFeedCoordinator:
             if isinstance(event.cycle, RegularCandidate)
         )
 
-    def monitored_market(self, monitor_key: str) -> MonitoredMarket | None:
-        """Return the cycle or regular candidate identified by a stable key."""
+    def monitored_market(self, monitor_key: str) -> RegularCandidate | None:
+        """Return the selected event identified by its stable monitor key."""
         event = self._matches.get(monitor_key)
-        if event is not None:
-            return event.cycle
-        return next(
-            (
-                cycle
-                for cycle in self._cycles
-                if monitored_market_key(cycle) == monitor_key
-            ),
-            None,
-        )
+        return event.cycle if event is not None else None
 
     async def configure_execution(
         self,
@@ -262,24 +199,6 @@ class _MarketFeedCoordinator:
         for venue_id, contract_ids in self._desired.items():
             await self._preload_execution(venue_id, contract_ids)
 
-    async def prepare_matches(self, event: MarketMatchesUpdated) -> None:
-        """Warm parent fee and execution adapters for externally owned matches.
-
-        Parameters
-        ----------
-        event
-            Worker-owned pairs that may become executable in the parent.
-        """
-        contracts: dict[VenueID, dict[ContractID, None]] = {}
-        for pair in event.pairs:
-            contracts.setdefault(pair.left.venue_id, {})[pair.left.id] = None
-            contracts.setdefault(pair.right.venue_id, {})[pair.right.id] = None
-        await asyncio.gather(
-            *(
-                self._prepare_contracts(venue_id, tuple(contract_ids))
-                for venue_id, contract_ids in contracts.items()
-            ),
-        )
 
     async def start(self) -> None:
         """Start discovery and one dynamically resubscribed feed per venue."""
@@ -377,45 +296,27 @@ class _MarketFeedCoordinator:
         return True
 
     async def _discovery_loop(self) -> None:
+        """Refresh selected events with bounded retries outside the trading path."""
         while True:
-            loop = asyncio.get_running_loop()
-            started_at = loop.time()
+            started_at = time.monotonic()
+            failed = False
             try:
-                results = await self._match_cycles(self._cycles)
-            except Exception as error:
-                results = tuple(error for _ in self._cycles)
-            failed = any(isinstance(result, BaseException) for result in results)
-            DISCOVERY_REFRESH_DURATION.observe(loop.time() - started_at)
-            DISCOVERY_REFRESHES.labels(
-                "partial_failure" if failed else "success",
-            ).inc()
-            async with self._refresh_lock:
-                for cycle, result in zip(self._cycles, results, strict=True):
-                    if isinstance(result, BaseException):
-                        self.error = result
-                        _events.warning(
-                            "Market discovery failed for %s: %s",
-                            cycle,
-                            result,
-                        )
-                        continue
-                    result = self._with_tick_sizes(result)
-                    key = monitored_market_key(cycle)
-                    current = self._matches.get(key)
-                    if current is None or current.pairs != result.pairs:
-                        await self._pipeline.sink.publish(result)
-                    self._matches[key] = result
-                    if self._on_cycle_matches is not None:
-                        await self._on_cycle_matches(result)
-                await self._refresh_regular_matches()
-                try:
+                async with self._refresh_lock:
+                    await asyncio.wait_for(
+                        self._refresh_regular_matches(),
+                        timeout=self._refresh_timeout_seconds,
+                    )
                     await asyncio.wait_for(
                         self._refresh_subscriptions(),
                         timeout=self._refresh_timeout_seconds,
                     )
-                except Exception as error:
-                    self.error = error
-                    _events.warning("Market subscription refresh failed: %s", error)
+                self.error = None
+            except Exception as error:
+                failed = True
+                self.error = error
+                _events.warning("Selected market refresh failed: %s", error)
+            DISCOVERY_REFRESH_DURATION.observe(time.monotonic() - started_at)
+            DISCOVERY_REFRESHES.labels("partial_failure" if failed else "success").inc()
             await asyncio.sleep(self._refresh_seconds)
 
     async def _refresh_regular_matches(self) -> None:
@@ -442,31 +343,6 @@ class _MarketFeedCoordinator:
                 await self._pipeline.sink.publish(refreshed)
             self._matches[key] = refreshed
 
-    async def _match_cycles(
-        self,
-        cycles: tuple[MarketCycle, ...],
-    ) -> tuple[MarketMatchesUpdated, ...]:
-        """Bound one batched discovery attempt for all recurring cycles.
-
-        Parameters
-        ----------
-        cycles
-            Recurring market windows to discover and match.
-
-        Returns
-        -------
-        tuple[MarketMatchesUpdated, ...]
-            Current complementary pairs in cycle order.
-
-        Raises
-        ------
-        TimeoutError
-            If venue discovery does not finish before the refresh timeout.
-        """
-        return await asyncio.wait_for(
-            self._matcher.match_cycles(cycles),
-            timeout=self._refresh_timeout_seconds,
-        )
 
     async def _refresh_subscriptions(self) -> None:
         contracts: dict[VenueID, dict[ContractID, BinaryContract]] = {
@@ -596,14 +472,6 @@ class _MarketFeedCoordinator:
           the execution adapter.
         """
         self.apply_tick_size(venue_id, contract_id, tick_size)
-        if self._on_tick_size_change is not None:
-            try:
-                self._on_tick_size_change(venue_id, contract_id, tick_size)
-            except Exception as error:
-                # Socket reconnect alone cannot repair a lost metadata message.
-                self.error = error
-                self._failed.set()
-                raise
         await self._publish_tick_sizes({contract_id: tick_size})
 
     def _with_tick_sizes(
@@ -747,13 +615,6 @@ class _MarketFeedCoordinator:
                                 max(0, published_at_ns - order_book.received_at_ns)
                                 / 1_000_000_000,
                             )
-                        if self._on_book_published is not None:
-                            self._on_book_published(
-                                venue_id,
-                                order_book,
-                                publish_started_ns,
-                                published_at_ns,
-                            )
         finally:
             active_pumps.dec()
 
@@ -761,4 +622,3 @@ class _MarketFeedCoordinator:
         if not task.cancelled() and (error := task.exception()) is not None:
             self.error = error
             self._failed.set()
-

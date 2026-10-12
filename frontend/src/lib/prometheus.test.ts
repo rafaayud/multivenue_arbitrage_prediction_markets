@@ -197,125 +197,33 @@ polymarket_ws_queue_overloads_total{outcome="restarted"} 1`
     ])
   })
 
-  test("builds per-partition worker and bounded IPC diagnostics", () => {
-    const source = `
-market_worker_up{partition="btc-5m"} 1
-market_worker_heartbeat_age_seconds{partition="btc-5m"} 0.25
-market_worker_pid{partition="btc-5m"} 123
-market_worker_generation{partition="btc-5m"} 2
-market_worker_starts_total{partition="btc-5m"} 2
-market_worker_restarts_total{partition="btc-5m"} 1
-market_worker_unexpected_exits_total{partition="btc-5m",exit_code="1"} 1
-market_worker_cpu_seconds{partition="btc-5m"} 7.5
-market_worker_memory_bytes{partition="btc-5m"} 104857600
-market_worker_ipc_queue_depth 3
-market_worker_ipc_queue_capacity 1024
-market_worker_ipc_queue_high_watermark 19
-market_worker_intents_rejected_total{partition="btc-5m",reason="stale_source"} 2
-market_worker_shadow_detections_total{partition="btc-5m",outcome="agree"} 4
-market_worker_ws_queue_depth_frames{partition="btc-5m",venue="POLYMARKET"} 8
-market_worker_ws_queue_high_watermark_frames{partition="btc-5m",venue="POLYMARKET"} 44
-market_worker_ws_paused_streams{partition="btc-5m",venue="POLYMARKET"} 1
-market_worker_timing_seconds{partition="btc-5m",venue="POLYMARKET",stage="source_to_transport_max"} 0.22
-market_worker_timing_seconds{partition="btc-5m",venue="POLYMARKET",stage="transport_to_sink_max"} 0.04
-market_worker_event_loop_lag_seconds_bucket{partition="btc-5m",le="0.1"} 1
-market_worker_event_loop_lag_seconds_bucket{partition="btc-5m",le="+Inf"} 1
-market_worker_event_loop_lag_seconds_sum{partition="btc-5m"} 0.05
-market_worker_event_loop_lag_seconds_count{partition="btc-5m"} 1
-market_worker_intent_ipc_seconds_bucket{partition="btc-5m",le="0.025"} 1
-market_worker_intent_ipc_seconds_bucket{partition="btc-5m",le="+Inf"} 1
-market_worker_intent_ipc_seconds_sum{partition="btc-5m"} 0.01
-market_worker_intent_ipc_seconds_count{partition="btc-5m"} 1
-market_worker_book_age_seconds_bucket{partition="btc-5m",venue="POLYMARKET",stage="submission",clock="source",le="0.5"} 1
-market_worker_book_age_seconds_bucket{partition="btc-5m",venue="POLYMARKET",stage="submission",clock="source",le="+Inf"} 1
-market_worker_book_age_seconds_sum{partition="btc-5m",venue="POLYMARKET",stage="submission",clock="source"} 0.2
-market_worker_book_age_seconds_count{partition="btc-5m",venue="POLYMARKET",stage="submission",clock="source"} 1
-market_worker_ws_queue_wait_max_seconds{partition="btc-5m",venue="POLYMARKET"} 0.05`
-
-    const result = pipelineMetrics(source)
-    expect(result.workerIpc).toEqual({
-      depth: 3,
-      capacity: 1024,
-      highWatermark: 19,
-    })
-    expect(result.marketWorkers[0]).toMatchObject({
-      partition: "btc-5m",
-      alive: true,
-      heartbeatAge: 0.25,
-      pid: 123,
-      generation: 2,
-      restarts: 1,
-      unexpectedExits: 1,
-      rejectedIntents: 2,
-      shadowAgreements: 4,
-      memoryBytes: 104857600,
-    })
-    expect(result.marketWorkers[0]?.venues[0]).toMatchObject({
-      venue: "Polymarket",
-      queueDepth: 8,
-      queueHighWatermark: 44,
-      pausedStreams: 1,
-      queueWaitMax: 0.05,
-      sourceToTransportMax: 0.22,
-      transportToSinkMax: 0.04,
-    })
-  })
-
-  test("keeps absent capture and validation telemetry unknown", () => {
-    const result = pipelineMetrics('market_worker_up{partition="crypto-slow"} 1')
+  test("keeps absent capture telemetry unknown", () => {
+    const result = pipelineMetrics('')
     expect(result.parentCapture).toEqual({
       state: "unknown", queueDepth: null, queueCapacity: null, droppedSamples: null,
       offersAfterStop: null, bytes: null, activeWindows: null, writerAlive: null,
       writerProgressAge: null,
     })
-    expect(result.marketWorkers[0]?.capture).toEqual(result.parentCapture)
-    expect(result.marketWorkers[0]?.validationP95).toBeNull()
-    expect(result.marketWorkers[0]?.validationOutcomes).toBeNull()
   })
 
-  test("ignores configured partitions when multiprocessing is disabled", () => {
-    const result = pipelineMetrics(
-      'market_worker_validation_queue_depth{partition="crypto-slow"} 0',
-    )
-
-    expect(result.marketWorkers).toEqual([])
-  })
-
-  test("parses capture exhaustion, loss, pressure and final validation outcomes", () => {
+  test("parses capture exhaustion, loss and pressure", () => {
     const result = pipelineMetrics(`
-market_worker_up{partition="crypto-slow"} 1
-predict_fill_capture_state{producer="parent",state="disabled"} 1
-predict_fill_capture_state{producer="crypto-slow",state="running"} 0
-predict_fill_capture_state{producer="crypto-slow",state="disk_limit"} 1
-predict_fill_capture_queue_depth{producer="crypto-slow"} 4
-predict_fill_capture_queue_capacity{producer="crypto-slow"} 512
-predict_fill_capture_dropped_samples{producer="crypto-slow"} 7
-predict_fill_capture_offers_after_stop{producer="crypto-slow"} 9
-predict_fill_capture_bytes{producer="crypto-slow"} 33554432
-predict_fill_capture_active_windows{producer="crypto-slow"} 2
-predict_fill_capture_writer_alive{producer="crypto-slow"} 0
-predict_fill_capture_writer_progress_age_seconds{producer="crypto-slow"} 3
-market_worker_validation_queue_depth{partition="crypto-slow"} 1
-market_worker_validation_queue_capacity{partition="crypto-slow"} 8
-market_worker_validation_results_total{partition="crypto-slow",outcome="accepted"} 3
-market_worker_validation_results_total{partition="crypto-slow",outcome="timeout"} 1
-market_worker_validation_round_trip_seconds_bucket{partition="crypto-slow",le="0.1"} 4
-market_worker_validation_round_trip_seconds_bucket{partition="crypto-slow",le="+Inf"} 4
-market_worker_validation_round_trip_seconds_count{partition="crypto-slow"} 4
-market_worker_validation_round_trip_seconds_sum{partition="crypto-slow"} 0.2
+predict_fill_capture_state{producer="parent",state="running"} 0
+predict_fill_capture_state{producer="parent",state="disk_limit"} 1
+predict_fill_capture_queue_depth{producer="parent"} 4
+predict_fill_capture_queue_capacity{producer="parent"} 512
+predict_fill_capture_dropped_samples{producer="parent"} 7
+predict_fill_capture_offers_after_stop{producer="parent"} 9
+predict_fill_capture_bytes{producer="parent"} 33554432
+predict_fill_capture_active_windows{producer="parent"} 2
+predict_fill_capture_writer_alive{producer="parent"} 0
+predict_fill_capture_writer_progress_age_seconds{producer="parent"} 3
 `)
-    expect(result.parentCapture.state).toBe("disabled")
-    expect(result.marketWorkers[0]?.capture).toEqual({
+    expect(result.parentCapture).toEqual({
       state: "disk_limit", queueDepth: 4, queueCapacity: 512, droppedSamples: 7,
       offersAfterStop: 9, bytes: 33554432, activeWindows: 2, writerAlive: false,
       writerProgressAge: 3,
     })
-    expect(result.marketWorkers[0]?.validationP95).toBeCloseTo(0.095)
-    expect(result.marketWorkers[0]?.validationQueueDepth).toBe(1)
-    expect(result.marketWorkers[0]?.validationQueueCapacity).toBe(8)
-    expect(result.marketWorkers[0]?.validationOutcomes).toEqual([
-      { outcome: "accepted", count: 3 }, { outcome: "timeout", count: 1 },
-    ])
   })
 
   test("does not report healthy capture from conflicting or invalid metrics", () => {

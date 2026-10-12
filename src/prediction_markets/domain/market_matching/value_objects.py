@@ -6,16 +6,10 @@ Responsibilities
 """
 
 from dataclasses import dataclass
-from decimal import Decimal
 
 from prediction_markets.domain.contracts.entities import BinaryContract
-from prediction_markets.domain.market_matching.enums import (
-    ComparisonOperator,
-    ObservationMethod,
-    UpDownOutcome,
-)
 from prediction_markets.domain.markets.entities import Market
-from prediction_markets.domain.shared.value_objects import Currency, Money, Timestamp
+from prediction_markets.domain.shared.value_objects import Timestamp
 
 _UNDERLYING_ALIASES = {
     "BTC": "BTC",
@@ -63,80 +57,6 @@ class Underlying:
 
     def __str__(self):
         return self.symbol
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class Strike:
-    """Represent an immutable positive strike value.
-
-    Invariants
-    ----------
-    - `value` is strictly positive.
-    """
-    value: Decimal
-
-    def __post_init__(self):
-        if self.value <= 0:
-            raise ValueError("Strike must be positive")
-
-    def __str__(self):
-        return f"{self.value:.2f}"
-
-
-@dataclass(frozen=True, slots=True)
-class UpDownResolutionRule:
-    """Describe how an immutable up-or-down market determines its outcome.
-
-    Invariants
-    ----------
-    - The observation window is non-negative.
-    - A provided source is normalized to non-empty uppercase text.
-    """
-    observation: ObservationMethod
-    observation_window_seconds: int
-    comparison: ComparisonOperator
-    tie_outcome: UpDownOutcome
-    source: str | None = None
-
-    def __post_init__(self):
-        if self.observation_window_seconds < 0:
-            raise ValueError("Observation window must not be negative")
-        if self.source is not None:
-            source = self.source.strip().upper()
-            if not source:
-                raise ValueError("Resolution source cannot be blank")
-            object.__setattr__(self, "source", source)
-
-
-@dataclass(frozen=True, slots=True)
-class UpDownMarketKey:
-    """Identify immutable up-or-down market semantics across venues.
-
-    Invariants
-    ----------
-    - The start precedes the end.
-    - A published reference price is positive and uses the key currency.
-
-    Notes
-    -----
-    - ``None`` records that a venue does not publish the reference observation.
-      Application compatibility rules decide whether such keys may be compared.
-    """
-    underlying: Underlying
-    currency: Currency
-    start: Timestamp
-    end: Timestamp
-    reference_price: Money | None
-    resolution_rule: UpDownResolutionRule
-
-    def __post_init__(self):
-        if self.start >= self.end:
-            raise ValueError("Start must be before end")
-        if self.reference_price is not None:
-            if self.reference_price.amount <= 0:
-                raise ValueError("Reference price must be positive")
-            if self.reference_price.currency != self.currency:
-                raise ValueError("Reference price currency must match market currency")
 
 
 @dataclass(frozen=True, slots=True)

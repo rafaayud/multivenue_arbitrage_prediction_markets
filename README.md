@@ -110,7 +110,7 @@ transactions. Do not fund accounts solely to obtain screenshots or latency data.
 - A signal is an observed price discrepancy, not guaranteed profit. One leg may
   fill while the other fails, and fees, slippage or recovery can produce losses.
 - Check contract resolution rules on both venues. Capital may remain committed
-  until settlement, and stopping the worker does not automatically close positions.
+  until settlement, and stopping the runtime does not automatically close positions.
 - Review balances, collateral approvals and per-venue limits before enabling
   trading. The configured recovery-loss limit is not a guarantee on total losses.
 
@@ -356,9 +356,12 @@ submission and observation are coordinated by the output dispatcher, with
 parallel work for the two venues. Bounded buffers make overload observable;
 they do not eliminate backpressure or make stale quotes executable.
 
-The control API and trading runtime run as separate services. Although the
-codebase supports market-data worker processes, the supplied event-dashboard
-Compose configuration disables them and disables recurring-market monitoring.
+The control API and trading runtime run as separate services. Market feeds,
+detection and execution share the trading runtime for explicitly selected events.
+There are no multicore market-data workers or automatic recurring-market matching.
+Legacy cycle identifiers remain readable in historical journals; live runs do not
+admit them. The former `MARKET_DATA_WORKERS_MODE` and
+`MARKET_RECURRING_MARKETS_ENABLED` settings are no longer used.
 
 Stage timings, book age, queue usage and event-loop lag are instrumented. There
 is no fixed latency guarantee: feed quality, scheduling, signing and venue

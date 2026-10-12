@@ -17,7 +17,6 @@ import psycopg
 
 from prediction_markets.api.models import (
     ArbitrageOpportunityOut,
-    ContractOut,
     ExecutionActivityOut,
     ExecutionJournalOut,
     ExecutionLegOut,
@@ -28,7 +27,6 @@ from prediction_markets.api.models import (
     ManualExecutionResolutionOut,
     OrderOut,
     PositionOut,
-    MatchPairOut,
     TradeOut,
     PnlPointOut,
     PerformanceViewOut,
@@ -94,57 +92,6 @@ class TradingActivityReader:
             )
         return [_order_out(value) for value in values]
 
-    def market_matches(
-        self,
-        *,
-        underlying: str,
-        interval_seconds: int,
-    ) -> list[MatchPairOut]:
-        """Return the latest SQL-projected pairs for one monitored cycle."""
-        with psycopg.connect(self._dsn, connect_timeout=5) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    left_contract_id, left_market_id, left_outcome_id,
-                    left_venue_id, left_symbol,
-                    right_contract_id, right_market_id, right_outcome_id,
-                    right_venue_id, right_symbol
-                FROM matched_contracts
-                WHERE underlying = %s AND interval_seconds = %s
-                ORDER BY left_venue_id, left_contract_id, right_venue_id, right_contract_id
-                """,
-                (underlying, interval_seconds),
-            ).fetchall()
-        return [_match_pair_out(row) for row in rows]
-
-    def market_matches_by_cycle(self) -> dict[tuple[str, int], list[MatchPairOut]]:
-        """Return every latest cycle projection in one database read.
-
-        Returns
-        -------
-        dict[tuple[str, int], list[MatchPairOut]]
-            Pairs grouped by underlying and interval in seconds. Cycles without
-            persisted matches are absent.
-        """
-        with psycopg.connect(self._dsn, connect_timeout=5) as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    underlying, interval_seconds,
-                    left_contract_id, left_market_id, left_outcome_id,
-                    left_venue_id, left_symbol,
-                    right_contract_id, right_market_id, right_outcome_id,
-                    right_venue_id, right_symbol
-                FROM matched_contracts
-                ORDER BY underlying, interval_seconds,
-                         left_venue_id, left_contract_id,
-                         right_venue_id, right_contract_id
-                """
-            ).fetchall()
-        matches: dict[tuple[str, int], list[MatchPairOut]] = {}
-        for row in rows:
-            matches.setdefault((row[0], row[1]), []).append(_match_pair_out(row[2:]))
-        return matches
 
     def opportunities(
         self,
@@ -1079,26 +1026,6 @@ def _manual_resolution_out(
         ),
         executed_at=trade.executed_at.value,
         external_reference=external_reference,
-    )
-
-
-def _match_pair_out(row: tuple[object, ...]) -> MatchPairOut:
-    """Map one SQL projection row to a venue contract pair."""
-    return MatchPairOut(
-        left=ContractOut(
-            id=row[0],
-            market_id=row[1],
-            outcome_id=row[2],
-            venue_id=row[3],
-            symbol=row[4],
-        ),
-        right=ContractOut(
-            id=row[5],
-            market_id=row[6],
-            outcome_id=row[7],
-            venue_id=row[8],
-            symbol=row[9],
-        ),
     )
 
 

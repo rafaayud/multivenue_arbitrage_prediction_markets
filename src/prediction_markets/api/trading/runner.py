@@ -13,7 +13,6 @@ from decimal import Decimal
 import psycopg
 
 from prediction_markets.application.engine import EngineConfig
-from prediction_markets.domain.market_matching.value_objects import Underlying
 from prediction_markets.domain.trading.portfolio import STRATEGY_PORTFOLIO_ID
 from prediction_markets.infrastructure.venues.limitless.mappers import LIMITLESS_VENUE_ID
 from prediction_markets.infrastructure.venues.polymarket.mappers import POLYMARKET_VENUE_ID
@@ -22,7 +21,7 @@ from prediction_markets.infrastructure.venues.predict.mappers import PREDICT_VEN
 
 @dataclass(frozen=True, slots=True)
 class LiveArbitrageConfig:
-    """Hold monitored cycles and execution limits for one live run.
+    """Hold selected-event execution limits for one live run.
 
     Attributes
     ----------
@@ -47,18 +46,6 @@ class LiveArbitrageConfig:
         and other recurring markets use this 120-second default.
     """
 
-    underlyings: tuple[Underlying, ...] = (
-        Underlying("BTC"),
-        Underlying("ETH"),
-        Underlying("BNB"),
-        Underlying("NVDA"),
-        Underlying("AMZN"),
-        Underlying("META"),
-        Underlying("TSLA"),
-        Underlying("SPY"),
-        Underlying("SPCX"),
-    )
-    intervals_seconds: tuple[int, ...] = (3600, 86400)
     max_arbitrages: int = 1
     max_concurrent_arbitrages: int = 2
     min_notional_per_venue: Decimal = Decimal("1")
@@ -108,8 +95,8 @@ class LiveArbitrageConfig:
             execute_long=True,
             execute_short=False,
             short_market_keys=frozenset(self.short_market_keys),
-            allowed_underlyings=tuple(value.symbol for value in self.underlyings),
-            allowed_intervals_seconds=self.intervals_seconds,
+            allowed_underlyings=(),
+            allowed_intervals_seconds=(),
             min_market_time_remaining_seconds=self.min_market_time_remaining_seconds,
             portfolio_id=STRATEGY_PORTFOLIO_ID,
         )

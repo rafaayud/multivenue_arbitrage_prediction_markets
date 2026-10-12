@@ -12,16 +12,9 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from prediction_markets.api.dependencies import get_websocket_market_worker
 from prediction_markets.api.models import SignalData, SignalResponse
-from prediction_markets.api.runtime import ArbitrageRuntime, MONITORED_MARKET_CYCLES
-from prediction_markets.application.markets.models import (
-    MarketCycle,
-    MonitoredMarket,
-    monitored_market_key,
-)
-from prediction_markets.domain.market_matching.value_objects import (
-    RegularCandidate,
-    Underlying,
-)
+from prediction_markets.api.runtime import ArbitrageRuntime
+from prediction_markets.application.markets.models import monitored_market_key
+from prediction_markets.domain.market_matching.value_objects import RegularCandidate
 from prediction_markets.domain.trading.entities import Signal
 
 
@@ -47,27 +40,17 @@ async def _wait_for_disconnect(websocket: WebSocket) -> None:
         pass
 
 
-def _market_label(market: MonitoredMarket) -> str:
-    """Return a concise user-facing label for a signal stream."""
-    if isinstance(market, MarketCycle):
-        return market.underlying.symbol
-    return max((value.title for value in market.markets), key=len)
-
-
 def _signal_response(
-    market: MonitoredMarket,
+    market: RegularCandidate,
     left: Signal,
     right: Signal,
 ) -> SignalResponse:
-    """Map a cycle or regular candidate signal pair to the shared wire model."""
-    cycle = market if isinstance(market, MarketCycle) else None
+    """Map a selected event signal pair to the dashboard wire model."""
     return SignalResponse(
         type="arbitrage_signal_pair",
-        monitor_type="regular" if isinstance(market, RegularCandidate) else "cycle",
+        monitor_type="regular",
         monitor_key=monitored_market_key(market),
-        market_label=_market_label(market),
-        underlying=cycle.underlying.symbol if cycle else None,
-        interval_seconds=cycle.interval_seconds if cycle else None,
+        market_label=max((value.title for value in market.markets), key=len),
         signals=[_signal_data(left), _signal_data(right)],
     )
 
@@ -83,41 +66,24 @@ async def stream_arbitrage_signals(
     underlying: str | None = None,
     interval_seconds: int | None = None,
 ):
-    """
-    Stream validated signal pairs until the client disconnects or the worker stops.
+    """Stream signals for an explicitly monitored event.
 
     Parameters
     ----------
-    websocket
-        Accepted WebSocket connection used for JSON signal delivery.
     monitor_key
-        Stable key identifying either a recurring cycle or a regular candidate.
+        Stable key returned when selecting an event from the catalog.
     underlying
-        Legacy cycle symbol accepted together with ``interval_seconds``.
+        Retired selector, rejected with close code 1008 when present.
     interval_seconds
-        Legacy cycle interval accepted together with ``underlying``.
+        Retired selector, rejected with close code 1008 when present.
 
     Notes
     -----
-    - The endpoint closes with policy-violation code ``1008`` before accepting
-      unsupported or ambiguous selectors.
-    - Existing cycle query parameters remain supported for compatibility.
+    - Unsupported, missing, and legacy selectors are rejected before acceptance.
     """
-    try:
-        if monitor_key is not None:
-            if underlying is not None or interval_seconds is not None:
-                raise ValueError("Use monitor_key or cycle fields, not both")
-            market = market_worker.monitored_market(monitor_key)
-            if market is None:
-                raise ValueError("Market is not monitored")
-        else:
-            if underlying is None or interval_seconds is None:
-                raise ValueError("A market selector is required")
-            parsed_underlying = Underlying(underlying)
-            if (parsed_underlying, interval_seconds) not in MONITORED_MARKET_CYCLES:
-                raise ValueError("Cycle is not monitored")
-            market = MONITORED_MARKET_CYCLES[(parsed_underlying, interval_seconds)]
-    except (TypeError, ValueError):
+    market = market_worker.monitored_market(monitor_key) if monitor_key else None
+    if (underlying is not None or interval_seconds is not None
+            or not isinstance(market, RegularCandidate)):
         await websocket.close(code=1008)
         return
 

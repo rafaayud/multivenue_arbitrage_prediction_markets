@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -139,7 +138,6 @@ def _inventory_coordinator(
         object(),  # type: ignore[arg-type]
         dispatcher,
         [],
-        safety.read_available_collateral,
     )
     coordinator._service = inventory  # type: ignore[assignment]
     return coordinator
@@ -287,7 +285,7 @@ def test_regular_short_inventory_ignores_event_date_expiry() -> None:
     assert _short_inventory_expiry_error("regular:test", candidate, (pair,), 120) is None
 
 
-@pytest.mark.parametrize("action", ["prepare", "refresh", "redeem"])
+@pytest.mark.parametrize("action", ["prepare", "redeem"])
 def test_unresolved_inventory_blocks_new_runtime_operations(monkeypatch, action) -> None:
     """Reconcile persisted references before activation, rollover, or redemption."""
     left, right = _contract("left", "LIMITLESS"), _contract("right", "POLYMARKET")
@@ -311,7 +309,6 @@ def test_unresolved_inventory_blocks_new_runtime_operations(monkeypatch, action)
     with pytest.raises(RuntimeError, match="still pending"):
         asyncio.run(
             coordinator.prepare(("cycle:BTC:3600",)) if action == "prepare"
-            else coordinator.refresh(MarketMatchesUpdated(cycle, (pair,))) if action == "refresh"
             else coordinator.redeem_limitless_available()
         )
     assert not inventory.calls
@@ -416,77 +413,6 @@ def test_repairs_exact_legacy_long_and_strategy_short_books() -> None:
         "2.15",
     )
     assert _legacy_short_position_repairs(state, PortfolioID("strategy")) == ()
-
-
-def test_cycle_rollover_prepares_new_short_market_inventory_once() -> None:
-    """Split the new cycle and replace the engine's expired short allowlist."""
-    old_left = _contract("old-left", "left-venue")
-    old_right = _contract("old-right", "right-venue")
-    new_left = _contract("new-left", "left-venue")
-    new_right = _contract("new-right", "right-venue")
-    old_pair = MatchedContractPair(old_left, old_right, Timestamp.now())
-    new_pair = MatchedContractPair(new_left, new_right, Timestamp.now())
-    cycle = MarketCycle(Underlying("BTC"), 3600)
-    market_key = "cycle:BTC:3600"
-    state = TradingState()
-    state.apply(MarketMatchesUpdated(cycle, (old_pair,)))
-    engine = TradingEngine(EventDispatcher(state), {})
-    inventory = _Inventory(
-        {
-            old_left.venue_id: Decimal("8"),
-            old_right.venue_id: Decimal("11"),
-        },
-    )
-    coordinator = _inventory_coordinator(
-        state,
-        inventory,
-        engine=engine,
-        execution={
-            old_left.venue_id: _Collateral(Decimal("20")),
-            old_right.venue_id: _Collateral(Decimal("20")),
-        },
-    )
-
-    async def run() -> None:
-        pair_keys, inventory_by_contract = await coordinator.prepare(
-            (market_key,),
-        )
-        engine.enable(
-            EngineConfig(
-                max_notional_by_venue={
-                    old_left.venue_id: Decimal("10"),
-                    old_right.venue_id: Decimal("10"),
-                },
-                execute_short=True,
-                short_market_keys=frozenset({market_key}),
-                short_pair_keys=pair_keys,
-                short_inventory_by_contract=inventory_by_contract,
-            ),
-        )
-        event = MarketMatchesUpdated(cycle, (new_pair,))
-        await coordinator.refresh(event)
-        await coordinator.refresh(event)
-
-    asyncio.run(run())
-
-    assert inventory.calls == [
-        {
-            old_left.venue_id: old_left.market_id,
-            old_right.venue_id: old_right.market_id,
-        },
-        {
-            new_left.venue_id: new_left.market_id,
-            new_right.venue_id: new_right.market_id,
-        },
-    ]
-    assert engine._config is not None
-    assert engine._config.short_pair_keys == frozenset({new_pair.key})
-    assert engine._config.short_inventory_by_contract == {
-        new_left.id: Quantity(Decimal("8")),
-        new_right.id: Quantity(Decimal("11")),
-    }
-    assert engine._available_collateral(old_left.venue_id) == Decimal("20")
-    assert engine._available_collateral(old_right.venue_id) == Decimal("20")
 
 
 def test_periodic_collateral_refresh_applies_simulated_deposit() -> None:
@@ -735,64 +661,6 @@ def test_health_monitor_confirms_transient_timeout_before_stopping() -> None:
     assert health.calls == 3
 
 
-def test_pair_change_in_same_markets_does_not_prepare_short_inventory() -> None:
-    """Ignore contract-pair churn while each venue market remains unchanged."""
-    old_left = _contract("old-left", "left-venue")
-    old_right = _contract("old-right", "right-venue")
-    changed_left = replace(
-        old_left,
-        id=ContractID("changed-left"),
-        outcome_id=OutcomeID("changed-left"),
-    )
-    changed_right = replace(
-        old_right,
-        id=ContractID("changed-right"),
-        outcome_id=OutcomeID("changed-right"),
-    )
-    old_pair = MatchedContractPair(old_left, old_right, Timestamp.now())
-    changed_pair = MatchedContractPair(changed_left, changed_right, Timestamp.now())
-    cycle = MarketCycle(Underlying("BTC"), 3600)
-    market_key = "cycle:BTC:3600"
-    state = TradingState()
-    state.apply(MarketMatchesUpdated(cycle, (old_pair,)))
-    engine = TradingEngine(EventDispatcher(state), {})
-    inventory = _Inventory(
-        {
-            old_left.venue_id: Decimal("8"),
-            old_right.venue_id: Decimal("11"),
-        },
-    )
-    coordinator = _inventory_coordinator(state, inventory, engine=engine)
-
-    async def run() -> None:
-        pair_keys, inventory_by_contract = await coordinator.prepare(
-            (market_key,),
-        )
-        engine.enable(
-            EngineConfig(
-                max_notional_by_venue={},
-                execute_short=True,
-                short_market_keys=frozenset({market_key}),
-                short_pair_keys=pair_keys,
-                short_inventory_by_contract=inventory_by_contract,
-            ),
-        )
-        await coordinator.refresh(
-            MarketMatchesUpdated(cycle, (changed_pair,)),
-        )
-
-    asyncio.run(run())
-
-    assert inventory.calls == [
-        {
-            old_left.venue_id: old_left.market_id,
-            old_right.venue_id: old_right.market_id,
-        },
-    ]
-    assert engine._config is not None
-    assert engine._config.short_pair_keys == frozenset({old_pair.key})
-
-
 def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
     """Do not configure the engine until selected inventory is confirmed."""
     order = []
@@ -840,6 +708,8 @@ def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
     runtime.engine = _Engine()
     runtime.pipeline = _Waiting()
     runtime._feed = _Waiting()
+    from tests.api.test_websocket import _regular_candidate
+    runtime._feed.monitored_market = lambda _key: _regular_candidate()
     runtime.execution_runs = _Runs()
     runtime._inventory = _PreparedInventory()  # type: ignore[assignment]
     runtime._safety = RuntimeSafety(  # type: ignore[arg-type]
@@ -858,7 +728,7 @@ def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
 
     asyncio.run(
         runtime._run_execution(
-            LiveArbitrageConfig(short_market_keys=("cycle:BTC:3600",)),
+            LiveArbitrageConfig(short_market_keys=("regular:selected",)),
             asyncio.Event(),
         ),
     )

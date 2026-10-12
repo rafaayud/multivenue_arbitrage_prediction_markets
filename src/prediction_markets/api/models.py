@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TradingSessionStart(BaseModel):
@@ -19,37 +19,14 @@ class TradingSessionStart(BaseModel):
 class TradingRunStart(BaseModel):
     """Validate the explicit confirmation and risk limits required to start live trading."""
 
+    model_config = ConfigDict(extra="forbid")
+
     live: Literal[True]
     confirmation: Literal["LIVE"]
     allow_degraded_venues: bool = Field(
         default=False,
         description="Allow this run to start when venues are degraded but available.",
     )
-    underlyings: tuple[
-        Literal[
-            "BTC",
-            "ETH",
-            "BNB",
-            "NVDA",
-            "AMZN",
-            "META",
-            "TSLA",
-            "SPY",
-            "SPCX",
-        ],
-        ...,
-    ] = (
-        "BTC",
-        "ETH",
-        "BNB",
-        "NVDA",
-        "AMZN",
-        "META",
-        "TSLA",
-        "SPY",
-        "SPCX",
-    )
-    intervals_seconds: tuple[Literal[3600, 86400], ...] = (3600, 86400)
     max_arbitrages: int = Field(
         default=1,
         ge=1,
@@ -140,38 +117,6 @@ class VenueHealthReportOut(BaseModel):
     generated_at: datetime
     overall_status: Literal["operational", "degraded", "unavailable"]
     venues: list[VenueHealthOut]
-
-
-class ContractOut(BaseModel):
-    """Represent a normalized binary contract in an API response."""
-    id: str
-    market_id: str
-    outcome_id: str
-    venue_id: str
-    symbol: str | None = None
-
-
-class MatchPairOut(BaseModel):
-    """Represent one complementary cross-venue contract pair."""
-    left: ContractOut
-    right: ContractOut
-
-
-class MarketMatchesResponse(BaseModel):
-    """Return contract matches for one underlying and interval."""
-    underlying: str
-    interval_seconds: int
-    pairs: list[MatchPairOut]
-
-
-class MonitoredMarketMatchesOut(BaseModel):
-    """Return matches and identity metadata for one monitored market cycle."""
-
-    monitor_key: str
-    family: str
-    underlying: str
-    interval_seconds: int
-    pairs: list[MatchPairOut]
 
 
 class ArbitrageVenueMarketOut(BaseModel):

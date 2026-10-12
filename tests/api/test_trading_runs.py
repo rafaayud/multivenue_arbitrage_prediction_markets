@@ -48,16 +48,15 @@ def _body() -> dict[str, object]:
     return {
         "live": True,
         "confirmation": "LIVE",
-        "underlyings": ["BTC", "ETH", "BNB"],
-        "intervals_seconds": [3600, 86400],
     }
 
 
-def test_default_trading_intervals_match_hourly_and_daily_monitoring() -> None:
-    """Keep API defaults and runtime admission on the same enabled intervals."""
+def test_live_config_admits_only_selected_events() -> None:
+    """Remove recurring selectors and block historical cycles from live admission."""
     request = TradingRunStart(live=True, confirmation="LIVE")
-    assert request.intervals_seconds == (3600, 86400)
-    assert LiveArbitrageConfig().engine_config().allowed_intervals_seconds == (3600, 86400)
+    assert "intervals_seconds" not in request.model_dump()
+    assert LiveArbitrageConfig().engine_config().allowed_underlyings == ()
+    assert LiveArbitrageConfig().engine_config().allowed_intervals_seconds == ()
 
 
 @pytest.mark.parametrize("interval", [300, 900])

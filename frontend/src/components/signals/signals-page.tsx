@@ -23,42 +23,25 @@ import {
   filterOpportunities,
   type ArbitrageFilters,
 } from "@/features/arbitrage/filters"
-import { useMarketMatches } from "@/features/markets/use-market-matches"
-import { useRuntime } from "@/features/runtime/use-runtime"
-import { intervalLabel } from "@/lib/formatters"
 
-/** Present live cycle and regular-market arbitrage signals with filters. */
+import { useRuntime } from "@/features/runtime/use-runtime"
+
+/** Present selected-event arbitrage signals with long and short filters. */
 export function SignalsPage() {
   const stream = useArbitrageStream()
-  const marketMatches = useMarketMatches()
+
   const runtime = useRuntime()
   const [minNetEdge, setMinNetEdge] = useState("0")
   const [costBuffer, setCostBuffer] = useState("0")
   const [filters, setFilters] = useState<ArbitrageFilters>({
-    underlying: "ALL",
-    interval: "ALL",
+
     side: "ALL",
   })
   const opportunities = useMemo(
     () => filterOpportunities(stream.opportunities, filters),
     [stream.opportunities, filters],
   )
-  const assets = [
-    ...new Set([
-      ...marketMatches.matches.map((market) => market.underlying),
-      ...stream.opportunities.flatMap((opportunity) =>
-        opportunity.underlying ? [opportunity.underlying] : [],
-      ),
-    ]),
-  ].sort()
-  const intervals = [
-    ...new Set([
-      ...marketMatches.matches.map((market) => market.interval_seconds),
-      ...stream.opportunities.flatMap((opportunity) =>
-        opportunity.intervalSeconds ? [opportunity.intervalSeconds] : [],
-      ),
-    ]),
-  ].sort((left, right) => left - right)
+
   const currentMinEdge = runtime.runtime?.signal_settings?.min_net_edge
   const currentCostBuffer = runtime.runtime?.signal_settings?.cost_buffer
 
@@ -108,52 +91,6 @@ export function SignalsPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Select
-              value={filters.underlying}
-              onValueChange={(value) =>
-                setFilters((current) => ({
-                  ...current,
-                  underlying: value as ArbitrageFilters["underlying"],
-                }))
-              }
-            >
-              <SelectTrigger aria-label="Filter by underlying">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All assets</SelectItem>
-                {assets.map((asset) => (
-                  <SelectItem key={asset} value={asset}>
-                    {asset}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select
-              value={String(filters.interval)}
-              onValueChange={(value) =>
-                setFilters((current) => ({
-                  ...current,
-                  interval:
-                    value === "ALL"
-                      ? "ALL"
-                      : Number(value),
-                }))
-              }
-            >
-              <SelectTrigger aria-label="Filter by interval">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All cycles</SelectItem>
-                {intervals.map((value) => (
-                  <SelectItem key={value} value={String(value)}>
-                    {intervalLabel(value)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
 
             <Select
               value={filters.side}

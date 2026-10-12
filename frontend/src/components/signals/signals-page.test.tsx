@@ -15,15 +15,6 @@ vi.mock("@/features/arbitrage/arbitrage-stream-provider", () => ({
   }),
 }))
 
-vi.mock("@/features/markets/use-market-matches", () => ({
-  useMarketMatches: () => ({
-    matches: [],
-    loading: false,
-    error: null,
-    updatedAt: null,
-  }),
-}))
-
 vi.mock("@/features/runtime/use-runtime", () => ({
   useRuntime: () => ({
     runtime: {

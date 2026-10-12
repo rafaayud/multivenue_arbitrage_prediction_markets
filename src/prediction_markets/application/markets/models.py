@@ -2,7 +2,7 @@
 
 Responsibilities
 ----------------
-- Identify monitored market cycles for discovery and signal subscription.
+- Retain historical cycle identities for journal replay.
 - Carry provider-neutral regular market selections into native discovery.
 """
 
@@ -18,7 +18,7 @@ from prediction_markets.domain.shared.value_objects import VenueID
 
 
 class MarketFamily(StrEnum):
-    """Classify recurring markets whose venue compatibility differs."""
+    """Retain historical recurring-market families for journal replay."""
 
     CRYPTO = "crypto"
     FINANCE = "finance"
@@ -58,7 +58,7 @@ class RegularMarketSelection:
 
 @dataclass(frozen=True, slots=True)
 class MarketCycle:
-    """Identify one underlying, prediction-window duration, and market family.
+    """Retain one historical underlying, window duration, and market family.
 
     Attributes
     ----------
@@ -67,7 +67,7 @@ class MarketCycle:
     interval_seconds
         Positive prediction-window duration in seconds.
     family
-        Compatibility family used to select approved venue routes.
+        Original compatibility family stored in the journal.
 
     Invariants
     ----------
