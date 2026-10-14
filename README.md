@@ -152,7 +152,8 @@ top-of-book discrepancy is not enough if the required quantity is unavailable.
 The shared engine also implements covered SELL arbitrage, with inventory
 preparation for selected markets. Selling requires existing outcome tokens; it
 is not uncollateralized short selling. The live-testing scope described below
-applies to BUY trades, not to every strategy the code supports.
+includes small BUY orders and the covered SHORT executions documented below;
+it does not cover every strategy or order size the code supports.
 
 ### Preparing inventory for covered SHORT trades
 
@@ -272,6 +273,33 @@ PostgreSQL projection runs in the background; it is not a synchronous database
 commit between the two submissions. If the fills do not match, this is no longer
 the completed-entry path: the execution can require recovery or manual review.
 
+### Observed covered SHORT executions
+
+On **14 October 2026**, the application completed three covered SHORT executions
+for **"Will Flávio Bolsonaro win the 2026 Brazilian presidential election?"**
+across Predict.fun and Polymarket. The persisted execution records and six trade
+fills show the same two legs for each execution:
+
+- **Predict.fun:** SELL 5 YES at **0.862**.
+- **Polymarket:** SELL 5 NO at **0.149**.
+
+| Started (Europe/Madrid) | Final status | Filled per leg | Residual quantity | Recorded lifecycle duration |
+| --- | --- | ---: | ---: | ---: |
+| 19:37:36 | `completed` | 5 / 5 | 0 | 2.86 s |
+| 19:40:46 | `completed` | 5 / 5 | 0 | 3.14 s |
+| 19:44:15 | `completed` | 5 / 5 | 0 | 3.11 s |
+
+The lifecycle duration is the difference between the execution record's
+`created_at` and final `updated_at`; it is not network round-trip latency or a
+performance guarantee. Both legs filled their requested quantity, and these
+three executions have no recorded recovery operation or execution error.
+
+The order flow is: detect a SELL opportunity, size it against available outcome
+inventory and venue limits, prepare both orders, record the prepared batch,
+submit both legs concurrently, and process their independent fill updates until
+the execution is complete. These records demonstrate order execution, not
+portfolio-level profitability or completed event settlement.
+
 ## Functionality
 
 - **Event selection:** discover cross-venue candidates and explicitly connect
@@ -374,10 +402,11 @@ responses all contribute to the execution timeline.
 
 ### Small order sizes only
 
-Our reported live testing has been limited to **BUY orders of up to EUR 10
-equivalent per venue**. This describes the scope of our experience, not a
-hard-coded EUR limit or evidence that larger orders will behave similarly.
-Actual orders use each venue's quote and collateral currency.
+Our reported live testing includes **BUY orders of up to EUR 10 equivalent per
+venue** and the **three covered SHORT executions of 5 contracts per leg**
+documented above. This describes the scope of our experience, not a hard-coded
+EUR limit or evidence that larger orders will behave similarly. Actual orders
+use each venue's quote and collateral currency.
 
 Execution quality at larger sizes has not been established. Displayed depth,
 slippage, partial fills and recovery liquidity can behave differently as size
