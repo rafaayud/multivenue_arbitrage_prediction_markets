@@ -19,6 +19,34 @@ ports-and-adapters boundaries with venue-specific market data and execution.
 
 ## Application screenshots
 
+### Completed executions — 14 October 2026
+
+Captured from the local application after three covered SHORT executions on
+**Will Flávio Bolsonaro win the 2026 Brazilian presidential election?** Each
+execution sold 5 YES on Predict and 5 NO on Polymarket. The screenshots show
+persisted execution records; capturing them did not submit additional orders.
+
+**Execution attempts.** All three pairs completed, with both legs filled 5/5.
+The table shows each leg's fill price and trading fee, plus approximately
+**$0.0159 net per execution** at the dashboard's displayed precision.
+
+![Three completed execution attempts with both venue legs and per-trade net PnL](docs/screenshots/execution-attempts-2026-10-14.png)
+
+**Closed execution net PnL.** The total is **+$0.0475 after trading fees**.
+This is the dashboard's execution-level result: it excludes inventory-operation
+gas and is not the account's all-in profit. The captures are cropped to the
+relevant panels without changing their data.
+
+![Closed execution net PnL and trading fees for the three completed pairs](docs/screenshots/closed-execution-pnl-2026-10-14.png)
+
+**Orders.** Six persisted SELL orders, all filled 5/5, at 0.862 on Predict and
+0.149 on Polymarket. See [Observed covered SHORT executions](#observed-covered-short-executions)
+for the execution times and scope of this observation.
+
+![Six filled SELL orders across Predict and Polymarket](docs/screenshots/filled-orders-2026-10-14.png)
+
+### Market monitoring — 6 October 2026
+
 Captured from the local Docker application on **6 October 2026**, with
 **trading disabled**. The monitor, catalog, pipeline and latency views show live
 data. The opportunity images reproduce the real persisted detections described

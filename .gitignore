@@ -108,3 +108,5 @@ reports/
 frontend/ios/App/App/GoogleService-Info.plist
 .pnpm-store/
 data/
+
+help.md
