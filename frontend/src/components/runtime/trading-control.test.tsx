@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, test, vi } from "vitest"
 
 import { TradingControl } from "@/components/runtime/trading-control"
+import { apiClient } from "@/lib/api-client"
 import type { TradingRunController } from "@/features/trading/use-trading-run"
 import type { TradingRunStatus } from "@/types/trading"
 
@@ -30,6 +31,29 @@ function controller(
 }
 
 describe("TradingControl", () => {
+  test("registers declared manual splits without enabling trading", async () => {
+    const user = userEvent.setup()
+    const value = controller(null)
+    const importSplits = vi.spyOn(apiClient, "importManualSplits")
+      .mockResolvedValueOnce([{ venue_id: "POLYMARKET", market_id: "market", quantity: "30" }])
+      .mockResolvedValueOnce([])
+    render(<TradingControl controller={value} shortMarketKeys={["regular:selected"]} />)
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    const register = screen.getByRole("button", { name: "Register manual splits" })
+    expect(register).toBeDisabled()
+    await user.type(screen.getByLabelText("Trading API key"), "secret")
+    expect(register).toBeDisabled()
+    await user.click(screen.getByRole("checkbox", { name: /I created these extra pairs/ }))
+    await user.click(register)
+    expect(await screen.findByRole("status")).toHaveTextContent("30 YES + 30 NO on POLYMARKET")
+    expect(importSplits).toHaveBeenCalledWith("secret", ["regular:selected"])
+    expect(value.enable).not.toHaveBeenCalled()
+    expect(screen.getByRole("alertdialog")).toBeVisible()
+    await user.click(register)
+    expect(await screen.findByRole("status")).toHaveTextContent("No new complete sets")
+    importSplits.mockRestore()
+  })
+
   test("enables live trading only after confirmation and key entry", async () => {
     const user = userEvent.setup()
     const value = controller(null)

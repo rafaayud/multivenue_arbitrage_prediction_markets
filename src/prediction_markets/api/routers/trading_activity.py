@@ -28,6 +28,7 @@ from prediction_markets.api.models import (
     ExposureRecoveryOut,
     ManualExecutionResolutionIn,
     ManualExecutionResolutionOut,
+    ManualSplitImportIn,
     OrderOut,
     PnlDashboardOut,
     PnlReconciliationOut,
@@ -434,6 +435,34 @@ async def complete_execution(
         if value.external_reference is not None
         else None,
     )
+
+
+@runtime_router.post("/runtime/inventory/manual-splits", dependencies=_PROTECTED)
+async def import_manual_splits(
+    value: ManualSplitImportIn,
+    runtime: Annotated[ArbitrageRuntime, Depends(get_arbitrage_runtime)],
+) -> list[dict[str, object]]:
+    """Register declared fee-free manual splits for selected SHORT events.
+
+    Notes
+    -----
+    - Requires the trading key and explicit confirmation of unit cost and zero
+      user-paid fees. Reads live balances; does not verify historical receipts.
+    - Returns imported venue markets and complete-set quantities, or HTTP 409
+      when runtime state or inventory discrepancies prevent safe accounting.
+    """
+    try:
+        snapshots = await runtime.import_manual_splits(tuple(value.market_keys))
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return [
+        {
+            "venue_id": str(snapshot.reference.venue_id),
+            "market_id": str(snapshot.reference.balance_before.market_id),
+            "quantity": str(snapshot.quantity.value),
+        }
+        for snapshot in snapshots
+    ]
 
 
 @runtime_router.post(

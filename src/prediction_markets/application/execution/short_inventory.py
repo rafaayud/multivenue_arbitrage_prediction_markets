@@ -150,7 +150,7 @@ class ShortInventoryService:
           safe against duplicate full-size splits.
         - Check all venue deficits before any signing or submission.
         """
-        balances = await self._balances(markets)
+        balances = await self.get_balances(markets)
         for balance in balances:
             deficit = max(
                 self._target.value - balance.mergeable_quantity.value, Decimal("0"),
@@ -174,7 +174,7 @@ class ShortInventoryService:
         if not intents:
             return balances
         await self._execute(intents)
-        return await self._balances(markets)
+        return await self.get_balances(markets)
 
     async def cleanup(
         self,
@@ -223,7 +223,7 @@ class ShortInventoryService:
         tuple[InventoryOperationSnapshot, ...]
             Confirmed merge operations. Venues without complete sets are omitted.
         """
-        balances = await self._balances(markets)
+        balances = await self.get_balances(markets)
         intents = tuple(
             self._intent(
                 balance.venue_id,
@@ -260,7 +260,7 @@ class ShortInventoryService:
         settlements = await self._settlements(markets)
         for settlement in settlements:
             self._record(settlement)
-        balances = await self._balances(markets)
+        balances = await self.get_balances(markets)
         intents = tuple(
             self._intent(
                 balance.venue_id,
@@ -339,11 +339,26 @@ class ShortInventoryService:
                 )
         return tuple(settlements)
 
-    async def _balances(
+    async def get_balances(
         self,
         markets: Mapping[VenueID, MarketID],
     ) -> tuple[OutcomeInventoryBalance, ...]:
         """Read and validate current balances for every requested venue market.
+
+        Parameters
+        ----------
+        markets
+            Exact market identifiers keyed by venue.
+
+        Returns
+        -------
+        tuple[OutcomeInventoryBalance, ...]
+            Current balances in request order, without submitting operations.
+
+        Raises
+        ------
+        ShortInventoryError
+            If a read fails or the adapter reports another market.
 
         Notes
         -----

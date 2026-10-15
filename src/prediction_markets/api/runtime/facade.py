@@ -548,6 +548,15 @@ class ArbitrageRuntime:
             self._accounting._execution = dict(self._execution)
         return await self._accounting.reconcile_execution(execution_id)
 
+    async def import_manual_splits(
+        self,
+        market_keys: tuple[str, ...],
+    ) -> tuple[InventoryOperationSnapshot, ...]:
+        """Import operator-declared fee-free splits into the durable portfolio."""
+        if self._inventory is None:
+            raise RuntimeError("Arbitrage runtime is not initialized")
+        return await self._inventory.import_manual_splits(market_keys)
+
     async def reconcile_predict_inventory(
         self,
         operation_id: str,

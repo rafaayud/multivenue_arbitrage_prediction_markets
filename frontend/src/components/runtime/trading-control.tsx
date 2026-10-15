@@ -15,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { TradingRunController } from "@/features/trading/use-trading-run"
+import { apiClient } from "@/lib/api-client"
 import type { SignalSettings } from "@/types/runtime"
 import type { TradingRunSettings } from "@/types/trading"
 
@@ -49,6 +50,10 @@ export function TradingControl({
 }) {
   const [tradingKey, setTradingKey] = useState("")
   const [riskAcknowledged, setRiskAcknowledged] = useState(false)
+  const [manualSplitsDeclared, setManualSplitsDeclared] = useState(false)
+  const [importingSplits, setImportingSplits] = useState(false)
+  const [importResult, setImportResult] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
   const [maxArbitrages, setMaxArbitrages] = useState(
     String(DEFAULT_SETTINGS.max_arbitrages),
   )
@@ -69,7 +74,7 @@ export function TradingControl({
   const [maxRecoveryLoss, setMaxRecoveryLoss] = useState(
     String(DEFAULT_SETTINGS.max_recovery_loss),
   )
-  const busy = controller.requestState === "loading"
+  const busy = controller.requestState === "loading" || importingSplits
   const enabled =
     controller.run?.status === "preparing" ||
     controller.run?.status === "running" ||
@@ -125,6 +130,23 @@ export function TradingControl({
     )
   }
 
+  const importManualSplits = async () => {
+    if (busy || !tradingKey.trim() || !manualSplitsDeclared) return
+    setImportingSplits(true)
+    setImportResult(null)
+    setImportError(null)
+    try {
+      const imported = await apiClient.importManualSplits(tradingKey.trim(), shortMarketKeys)
+      setImportResult(imported.length
+        ? `Registered ${imported.map((item) => `${item.quantity} YES + ${item.quantity} NO on ${item.venue_id}`).join("; ")}. Saved for future runs.`
+        : "No new complete sets to register. Existing inventory is already accounted for.")
+    } catch (reason) {
+      setImportError(reason instanceof Error ? reason.message : "Manual split import failed")
+    } finally {
+      setImportingSplits(false)
+    }
+  }
+
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex items-center gap-2">
@@ -168,6 +190,9 @@ export function TradingControl({
             onOpenChange={(open) => {
               setTradingKey("")
               setRiskAcknowledged(false)
+              setManualSplitsDeclared(false)
+              setImportResult(null)
+              setImportError(null)
               if (open) {
                 setMinNetEdge(null)
                 setCostBuffer(null)
@@ -367,6 +392,41 @@ export function TradingControl({
                   className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </label>
+              {shortMarketKeys.length > 0 && (
+                <section className="mt-4 space-y-3 rounded-xl border border-border bg-muted/30 p-4">
+                  <h3 className="text-sm font-semibold">Already split manually?</h3>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Register unaccounted YES/NO pairs in the selected SHORT events.
+                    Their cost is 1 collateral unit per pair, allocated equally to
+                    YES and NO. This is saved across restarts; repeating it will
+                    not count the same tokens twice.
+                  </p>
+                  <label className="flex items-start gap-3 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={manualSplitsDeclared}
+                      onChange={(event) => setManualSplitsDeclared(event.target.checked)}
+                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                    />
+                    I created these extra pairs by splitting collateral manually,
+                    with no gas or fees charged to me.
+                  </label>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy || !tradingKey.trim() || !manualSplitsDeclared}
+                    onClick={() => void importManualSplits()}
+                  >
+                    {importingSplits && <LoaderCircle className="size-4 animate-spin" />}
+                    Register manual splits
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Reads balances and records inventory only. Trading stays disabled.
+                  </p>
+                  {importResult && <p role="status" className="text-xs text-emerald-600 dark:text-emerald-300">{importResult}</p>}
+                  {importError && <p role="alert" className="text-xs text-rose-600 dark:text-rose-300">{importError}</p>}
+                </section>
+              )}
               <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 text-sm font-medium">
                 <input
                   type="checkbox"

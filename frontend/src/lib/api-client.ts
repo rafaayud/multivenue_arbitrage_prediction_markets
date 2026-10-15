@@ -122,6 +122,23 @@ export const apiClient = {
       }),
     }),
 
+  /** Adopt explicitly declared fee-free split inventory without placing orders. */
+  importManualSplits: (tradingKey: string, marketKeys: string[]) =>
+    request<{ venue_id: string; market_id: string; quantity: string }[]>(
+      "/runtime/inventory/manual-splits",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Trading-Key": tradingKey,
+        },
+        body: JSON.stringify({
+          market_keys: marketKeys,
+          confirm_fee_free_splits: true,
+        }),
+      },
+    ),
+
   stopTrading: (runId: string) =>
     request<TradingRun>(`/trading-runs/${runId}/stop`, {
       method: "POST",

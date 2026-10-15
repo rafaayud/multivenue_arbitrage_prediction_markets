@@ -280,6 +280,14 @@ class TradeOut(BaseModel):
     venue_id: str = "legacy"
 
 
+class ManualSplitImportIn(BaseModel):
+    """Attest that excess complete sets came from splits with no fee paid by the user."""
+
+    model_config = ConfigDict(extra="forbid")
+    market_keys: list[str] = Field(min_length=1, max_length=100)
+    confirm_fee_free_splits: Literal[True]
+
+
 class AccountingCorrectionIn(BaseModel):
     """Replace the economic fields of one existing trade."""
 

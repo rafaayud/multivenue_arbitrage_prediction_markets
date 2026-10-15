@@ -197,6 +197,19 @@ This uses and locks existing funded collateral; it does not create money or
 credit. Existing complete sets count toward the target, so only the deficit is
 split. Selecting additional markets can require additional collateral.
 
+If you created complete sets manually on a venue website, select the event for
+SHORT execution and open **Enable trading → Already split manually?**. Enter the
+trading key, confirm that the extra tokens came from splits with **no gas or fees
+charged to you**, and click **Register manual splits** before enabling trading.
+This reads current balances and journals only the unaccounted equal YES/NO surplus
+at a cost of one collateral unit per pair (0.5 per outcome). It submits no blockchain
+transaction. Imports survive restarts, preserve existing realized PnL, and repeated
+clicks do not duplicate inventory. Holdings already assigned to another portfolio
+are excluded. Unequal balances, active executions, and pending inventory operations
+block the import and require reconciliation. This is an operator declaration of
+cost basis, not automatic verification of historical receipts; purchased tokens,
+external trades and splits with user-paid fees need separate accounting.
+
 For these explicitly selected regular events, the runtime **does not continuously
 replenish inventory after each SHORT**. To prepare another allocation after
 inventory is consumed, stop and start trading again with the desired SHORT events

@@ -596,6 +596,33 @@ def test_reconciles_pending_predict_inventory_by_transaction_hash() -> None:
     }
 
 
+def test_manual_split_import_requires_authentication_and_explicit_declaration() -> None:
+    """Keep importing cost basis separate from starting a trading run."""
+    calls = []
+
+    class Runtime:
+        async def import_manual_splits(self, keys):
+            calls.append(keys)
+            return ()
+
+    trading_app.dependency_overrides[get_arbitrage_runtime] = Runtime
+    try:
+        with TestClient(trading_app) as client:
+            path = "/runtime/inventory/manual-splits"
+            body = {"market_keys": ["regular:selected"], "confirm_fee_free_splits": True}
+            assert client.post(path, json=body).status_code == 401
+            headers = {"X-Trading-Key": "test-trading-key"}
+            for invalid in ({"market_keys": body["market_keys"]}, {**body, "confirm_fee_free_splits": False}, {**body, "market_keys": []}):
+                assert client.post(path, headers=headers, json=invalid).status_code == 422
+            assert calls == []
+            response = client.post(path, headers=headers, json=body)
+            assert response.status_code == 200
+            assert response.json() == []
+            assert calls == [("regular:selected",)]
+    finally:
+        trading_app.dependency_overrides.pop(get_arbitrage_runtime, None)
+
+
 def test_internal_pnl_cache_deduplicates_concurrent_database_reads(
     monkeypatch,
 ) -> None:

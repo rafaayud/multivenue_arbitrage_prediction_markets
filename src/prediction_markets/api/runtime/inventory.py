@@ -13,6 +13,7 @@ import logging
 import os
 from dataclasses import replace
 from decimal import Decimal
+from uuid import uuid4
 
 from prediction_markets.api.trading.runner import LiveArbitrageConfig
 from prediction_markets.application.engine import TradingEngine
@@ -38,14 +39,21 @@ from prediction_markets.domain.market_matching.value_objects import (
 )
 from prediction_markets.domain.outcome_inventory import (
     InventoryOperationID,
+    InventoryOperationReference,
     InventoryOperationSnapshot,
+    InventoryOperationStatus,
+    InventoryReconciliationResult,
+    InventoryReconciliationStatus,
+    OutcomeInventoryAction,
     OutcomeInventoryBalance,
     OutcomeInventorySettlement,
 )
 from prediction_markets.domain.ports.outcome_inventory import OutcomeInventoryPort
 from prediction_markets.domain.shared.value_objects import (
     ContractID,
+    Currency,
     MarketID,
+    Money,
     PortfolioID,
     PositionID,
     Quantity,
@@ -232,9 +240,103 @@ def _accounted_short_quantity(
     if accounted == 0 and balance.mergeable_quantity.value > 0:
         raise RuntimeError(
             f"Covered inventory for {contract.venue_id}/{contract.id} is not "
-            f"accounted in portfolio {portfolio_id}",
+            f"accounted in portfolio {portfolio_id}. If you split manually without "
+            "paying gas, use Register manual splits in the trading dialog first.",
         )
     return Quantity(min(balance.mergeable_quantity.value, accounted))
+
+
+def _manual_split_snapshot(
+    state: TradingState,
+    balance: OutcomeInventoryBalance,
+    portfolio_id: PortfolioID,
+) -> InventoryOperationSnapshot | None:
+    """Value explicitly declared, unaccounted complete sets at one collateral unit.
+
+    Parameters
+    ----------
+    state
+        Existing inventory across all portfolios sharing the venue wallet.
+    balance
+        Current holdings for one selected binary market.
+    portfolio_id
+        Portfolio receiving only the unaccounted complete sets.
+
+    Returns
+    -------
+    InventoryOperationSnapshot | None
+        Opening split accounting, or no record when holdings already reconcile.
+
+    Raises
+    ------
+    RuntimeError
+        If contract identities or tracked holdings cannot support a split import.
+
+    Notes
+    -----
+    - The operator attests that excess tokens came from fee-free manual splits.
+      Balances alone cannot prove acquisition cost or sponsorship.
+    - Count all portfolios to avoid adopting inventory already owned elsewhere.
+      Unequal deltas or short positions require separate reconciliation.
+    - This records opening inventory now, not a historical transaction. The
+      pre-import balance is reconstructed solely for split accounting.
+    """
+    contracts = (balance.yes_contract_id, balance.no_contract_id)
+    if None in contracts or contracts[0] == contracts[1]:
+        raise RuntimeError("Manual split import requires distinct YES and NO contracts")
+    unaccounted = []
+    for contract_id, available in zip(contracts, (balance.yes, balance.no), strict=True):
+        positions = [
+            position for position in state.positions.values()
+            if position.venue_id == balance.venue_id and position.contract_id == contract_id
+        ]
+        if any(
+            position.signed_quantity < 0
+            or (position.quantity.value > 0 and position.average_price is None)
+            for position in positions
+        ):
+            raise RuntimeError(f"Reconcile existing position basis before importing {contract_id}")
+        accounted = sum((position.signed_quantity for position in positions), Decimal("0"))
+        unaccounted.append(available.value - accounted)
+    if min(unaccounted) < 0 or unaccounted[0] != unaccounted[1]:
+        raise RuntimeError(
+            f"Cannot import manual splits for {balance.venue_id}/{balance.market_id}: "
+            f"unaccounted YES={unaccounted[0]}, NO={unaccounted[1]}. "
+            "Refresh balances or reconcile external trades/transfers first.",
+        )
+    if unaccounted[0] == 0:
+        return None
+    quantity = Quantity(unaccounted[0])
+    reference = InventoryOperationReference(
+        venue_id=balance.venue_id,
+        operation_id=InventoryOperationID(f"manual-split:{uuid4().hex}"),
+        recovery_data=b'{"schema":1,"source":"operator_declared_fee_free_split"}',
+        quantity=quantity,
+        action=OutcomeInventoryAction.SPLIT,
+        portfolio_id=portfolio_id,
+        balance_before=replace(
+            balance,
+            yes=Quantity(balance.yes.value - quantity.value),
+            no=Quantity(balance.no.value - quantity.value),
+            collateral=Money(
+                balance.collateral.amount + quantity.value, balance.collateral.currency,
+            ),
+        ),
+    )
+    zero_fee = Money(Decimal("0"), Currency("USD"))
+    return InventoryOperationSnapshot(
+        reference=reference,
+        status=InventoryOperationStatus.CONFIRMED,
+        updated_at=balance.observed_at,
+        quantity=quantity,
+        yes_quantity=quantity,
+        no_quantity=quantity,
+        collateral=Money(quantity.value, balance.collateral.currency),
+        fee=zero_fee,
+        fee_settlement_cost=zero_fee,
+        fee_observed_at=balance.observed_at,
+        reason="Operator-declared fee-free manual split; opening inventory at import time",
+    )
 
 
 def _legacy_short_position_repairs(
@@ -409,6 +511,68 @@ class ShortInventoryCoordinator:
                 ),
                 inventory_by_contract,
             )
+
+    async def import_manual_splits(
+        self,
+        market_keys: tuple[str, ...],
+    ) -> tuple[InventoryOperationSnapshot, ...]:
+        """Journal unaccounted complete sets explicitly declared as fee-free splits.
+
+        Parameters
+        ----------
+        market_keys
+            Selected SHORT events whose current venue balances may be adopted.
+
+        Returns
+        -------
+        tuple[InventoryOperationSnapshot, ...]
+            Newly imported sets; empty when every token is already accounted for.
+
+        Raises
+        ------
+        RuntimeError
+            If trading, executions or pending operations can change balances,
+            or the surplus does not consist of equal YES and NO quantities.
+
+        Notes
+        -----
+        - Reads venues but never submits a split, merge or order. The caller must
+          obtain the operator's explicit cost-basis and zero-fee declaration.
+        - Validate every selected balance before writing. Journal replay and
+          serialized balance checks prevent repeated imports of the same tokens.
+        """
+        async with self._operation_lock:
+            self._require_idle_for_import()
+            if not market_keys:
+                raise RuntimeError("Select at least one SHORT event to import manual splits")
+            selections = _short_inventory_selections(self.state, market_keys)
+            service = await self._ensure_service()
+            balances = {}
+            for _, markets, _ in selections:
+                for balance in await service.get_balances(markets):
+                    balances[(balance.venue_id, balance.market_id)] = balance
+            self._require_idle_for_import()
+            snapshots = []
+            for balance in balances.values():
+                snapshot = _manual_split_snapshot(self.state, balance, self.portfolio_id())
+                if snapshot is not None:
+                    snapshots.append(snapshot)
+            for snapshot in snapshots:
+                self._record(InventoryReconciliationResult(
+                    status=InventoryReconciliationStatus.FOUND,
+                    reference=snapshot.reference,
+                    snapshot=snapshot,
+                ))
+            return tuple(snapshots)
+
+    def _require_idle_for_import(self) -> None:
+        """Prevent importing balances while executions or inventory can move them."""
+        if (
+            self.state.trading_enabled
+            or self.engine.active_execution_count()
+            or self.state.pending_inventory_operations
+        ):
+            raise RuntimeError("Stop trading and resolve pending operations before importing splits")
 
     async def reconcile_predict_transaction(
         self,
