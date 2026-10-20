@@ -95,9 +95,10 @@ class ShortInventoryService:
             Portfolio that owns the resulting inventory and economics; must match
             the trading engine portfolio so splits and fills net into one WAC.
         reconciliation_timeout_seconds
-            Maximum time to wait for each submitted operation to become terminal.
+            Maximum wait for each operation to become terminal and, separately,
+            for post-split balances to show the required complete sets.
         poll_interval_seconds
-            Delay between venue reconciliation attempts.
+            Delay between venue reconciliation or post-split balance attempts.
 
         Raises
         ------
@@ -142,13 +143,15 @@ class ShortInventoryService:
         ------
         ShortInventoryError
             If an adapter is missing, split collateral is insufficient, or an
-            operation does not confirm.
+            operation or its required inventory does not become visible.
 
         Notes
         -----
         - Only the deficit below the target is split, making repeated activation
           safe against duplicate full-size splits.
         - Check all venue deficits before any signing or submission.
+        - After confirmation, poll balances until the target is visible without
+          submitting another split. RPC balance reads can lag mined receipts.
         """
         balances = await self.get_balances(markets)
         for balance in balances:
@@ -174,7 +177,27 @@ class ShortInventoryService:
         if not intents:
             return balances
         await self._execute(intents)
-        return await self.get_balances(markets)
+        deadline = time.monotonic() + self._timeout
+        while True:
+            balances = await self.get_balances(markets)
+            missing = tuple(
+                balance for balance in balances
+                if balance.mergeable_quantity < self._target
+            )
+            if not missing:
+                return balances
+            if time.monotonic() >= deadline:
+                details = "; ".join(
+                    f"{balance.venue_id}/{balance.market_id}: "
+                    f"YES={balance.yes.value}, NO={balance.no.value}, "
+                    f"required {self._target.value} complete sets"
+                    for balance in missing
+                )
+                raise ShortInventoryError(
+                    f"Confirmed split inventory is not visible: {details}. "
+                    "Reconcile balances before retrying; no additional split was submitted",
+                )
+            await asyncio.sleep(self._poll_interval)
 
     async def cleanup(
         self,

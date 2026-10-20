@@ -259,6 +259,51 @@ def test_retries_one_transient_balance_read() -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("stale_reads", [2, None])
+def test_waits_for_confirmed_split_balance_without_resubmitting(
+    monkeypatch, stale_reads,
+) -> None:
+    """Wait for visible inventory or fail with market details after one split."""
+
+    async def run() -> None:
+        venue, market = VenueID("venue"), MarketID("market")
+        inventory = _Inventory(venue, market, yes="0", no="0")
+        read_balance = inventory.get_balance
+        post_confirmation_reads = 0
+
+        def delayed_balance(market_id):
+            """Simulate stale RPC reads after a successful split receipt."""
+            nonlocal post_confirmation_reads
+            balance = read_balance(market_id)
+            if inventory.reconciled:
+                post_confirmation_reads += 1
+                if stale_reads is None or post_confirmation_reads <= stale_reads:
+                    return replace(
+                        balance, yes=Quantity(Decimal("0")), no=Quantity(Decimal("0")),
+                    )
+            return balance
+
+        monkeypatch.setattr(inventory, "get_balance", delayed_balance)
+        service = ShortInventoryService(
+            {venue: inventory},
+            lambda _: None,
+            portfolio_id=STRATEGY_PORTFOLIO_ID,
+            reconciliation_timeout_seconds=0.05 if stale_reads is None else 1,
+            poll_interval_seconds=0.001,
+        )
+        if stale_reads is None:
+            with pytest.raises(ShortInventoryError, match="venue/market.*YES=0.*NO=0"):
+                await service.ensure_short_inventory({venue: market})
+        else:
+            balances = await service.ensure_short_inventory({venue: market})
+            assert balances[0].mergeable_quantity == Quantity(Decimal("5"))
+            assert post_confirmation_reads == stale_reads + 1
+        assert len(inventory.submitted) == 1
+        assert inventory.collateral == Decimal("15")
+
+    asyncio.run(run())
+
+
 def test_records_confirmed_inventory_with_converted_native_fee() -> None:
     async def run() -> None:
         venue, market = VenueID("venue"), MarketID("market")
