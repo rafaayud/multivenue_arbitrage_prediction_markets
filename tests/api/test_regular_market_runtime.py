@@ -783,7 +783,7 @@ def test_manual_completion_clears_residual_exposure_durably() -> None:
             fee=Money(Decimal("0.03"), Currency("USD")),
             fee_settlement_cost=Money(Decimal("0.03"), Currency("USD")),
         )
-        runtime.state.trades[source_trade.id] = source_trade
+        runtime.state.apply(TradeRecorded(source_trade))
         source_position = apply_trade(None, source_trade).position
         runtime.state.positions[source_position.id] = source_position
         event_loop = _EventLoop(runtime.state)
@@ -1196,7 +1196,7 @@ def _predict_rounding_review():
         client_order_id=recovery.client_order_id,
         fee=state.orders[recovery.client_order_id].fee.charged,
         fee_settlement_cost=recovery.recovery_fee)
-    state.trades[fill.id] = fill
+    state.apply(TradeRecorded(fill))
     stop = TradingSafetyStop(predict, "Cancellation could not prove the order terminal: recovery (unknown)",
         now, execution_id=execution.id, client_order_id=recovery.client_order_id)
     state.apply(stop)

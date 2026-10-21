@@ -209,13 +209,9 @@ class ExecutionAccounting:
         """
         recorded: tuple[Trade, ...] = ()
         client_order_id = current.client_order_id or command.intent.client_order_id
-        if previous is None and client_order_id is not None:
-            # ponytail: replay-only scan; add a client-order trade index only if
-            # journal size makes restart measurably slow.
-            recorded = tuple(
-                value
-                for value in self._state.trades.values()
-                if value.client_order_id == client_order_id
+        if previous is None:
+            recorded = self._state.trades_for_order(
+                command.venue_id, client_order_id, current.order_id,
             )
         trade = _incremental_trade(
             command,
@@ -260,14 +256,10 @@ class ExecutionAccounting:
             return ()
         other_fills = tuple(
             value
-            for value in self._state.trades.values()
-            if value.venue_id == command.venue_id
-            and value.id != existing.id
-            and (
-                value.client_order_id == client_order_id
-                if client_order_id is not None
-                else value.order_id == current.order_id
+            for value in self._state.trades_for_order(
+                command.venue_id, client_order_id, current.order_id,
             )
+            if value.id != existing.id
         )
         corrected = replace(
             existing,

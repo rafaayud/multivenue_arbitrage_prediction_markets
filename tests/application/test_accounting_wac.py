@@ -211,7 +211,31 @@ def test_late_cumulative_token_fee_excludes_fees_of_previous_partial_fills() -> 
     assert position.fees.amount == Decimal("0.04")
     assert sum(trade.quantity.value for trade in state.trades.values()) == 10
     assert sum(trade.fee.amount for trade in state.trades.values()) == Decimal("0.1")
+
+    class NoHistoryScan(dict):
+        """Fail if a repeated order update scans the entire trade history."""
+
+        def values(self):
+            raise AssertionError("Unrelated trade history must not be scanned")
+
+    copied = replace(state, trades=dict(state.trades))
+    assert len(copied.trades_for_order(command.venue_id, intent.client_order_id)) == 2
+    state.trades = NoHistoryScan(state.trades)
     assert accounting.record(command, late, late, None) == ()
+
+
+def test_order_fill_index_is_venue_scoped_and_updates_replayed_trades() -> None:
+    """Index replayed fills without mixing matching client ids across venues."""
+    left = replace(
+        _trade("left", OrderSide.BUY, "10", "0.4", venue="PREDICT"),
+        client_order_id=ClientOrderID("shared-client-id"),
+    )
+    right = replace(left, id=TradeID("right"), venue_id=VenueID("LIMITLESS"))
+    state = TradingState(trades={left.id: left, right.id: right})
+    corrected = replace(left, fee_settlement_cost=Money(Decimal("0.04"), _USD))
+    state.apply(TradeRecorded(corrected))
+    assert state.trades_for_order(left.venue_id, left.client_order_id) == (corrected,)
+    assert state.trades_for_order(right.venue_id, right.client_order_id) == (right,)
 
 
 def test_accounting_correction_replays_later_partial_close() -> None:

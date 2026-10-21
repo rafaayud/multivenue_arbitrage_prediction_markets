@@ -58,6 +58,7 @@ from prediction_markets.domain.shared.value_objects import (
     ClientOrderID,
     ContractID,
     MarketID,
+    OrderID,
     PortfolioID,
     PositionID,
     Probability,
@@ -119,6 +120,9 @@ class TradingState:
     cancellations: dict[ClientOrderID, bytes] = field(default_factory=dict)
     orders: dict[ClientOrderID, OrderSnapshot] = field(default_factory=dict)
     trades: dict[TradeID, Trade] = field(default_factory=dict)
+    _trades_by_client_order: dict[
+        tuple[VenueID, ClientOrderID], dict[TradeID, None],
+    ] = field(default_factory=dict, init=False, repr=False)
     positions: dict[PositionID, Position] = field(default_factory=dict)
     inventory_operations: dict[InventoryOperationID, InventoryOperationSnapshot] = field(
         default_factory=dict,
@@ -144,6 +148,48 @@ class TradingState:
     def __post_init__(self) -> None:
         """Build lookup indexes for state supplied during construction."""
         self._rebuild_pair_index()
+        for trade in self.trades.values():
+            self._record_trade(trade)
+
+    def trades_for_order(
+        self,
+        venue_id: VenueID,
+        client_order_id: ClientOrderID | None,
+        order_id: OrderID | None = None,
+    ) -> tuple[Trade, ...]:
+        """Read fills in insertion order without scanning unrelated trades.
+
+        Notes
+        -----
+        - Client order ids use an index rebuilt during journal replay.
+        - Legacy fills without a client order id fall back to venue order id.
+        """
+        if client_order_id is None:
+            return tuple(
+                trade for trade in self.trades.values()
+                if order_id is not None and trade.venue_id == venue_id
+                and trade.order_id == order_id
+            )
+        return tuple(
+            self.trades[trade_id]
+            for trade_id in self._trades_by_client_order.get((venue_id, client_order_id), ())
+            if trade_id in self.trades
+        )
+
+    def _record_trade(self, trade: Trade) -> None:
+        """Update the canonical fill and its venue-scoped order index together."""
+        previous = self.trades.get(trade.id)
+        key = (trade.venue_id, trade.client_order_id)
+        if previous is not None and previous.client_order_id is not None:
+            old_key = (previous.venue_id, previous.client_order_id)
+            if old_key != key:
+                bucket = self._trades_by_client_order[old_key]
+                bucket.pop(trade.id, None)
+                if not bucket:
+                    self._trades_by_client_order.pop(old_key)
+        self.trades[trade.id] = trade
+        if trade.client_order_id is not None:
+            self._trades_by_client_order.setdefault(key, {})[trade.id] = None
 
     @property
     def portfolios(self) -> dict[tuple[VenueID, PortfolioID], Portfolio]:
@@ -248,7 +294,7 @@ class TradingState:
             self.orders[event.reference.client_order_id] = event.snapshot
             return
         if isinstance(event, TradeRecorded):
-            self.trades[event.trade.id] = event.trade
+            self._record_trade(event.trade)
             return
         if isinstance(event, PositionUpdated):
             self.positions[event.position.id] = _marked_position(
@@ -341,7 +387,7 @@ class TradingState:
             if correction.id in self.accounting_corrections:
                 return
             self.accounting_corrections[correction.id] = correction
-            self.trades[correction.target_trade_id] = correction.replacement_trade
+            self._record_trade(correction.replacement_trade)
             self.positions[correction.resulting_position.id] = _marked_position(
                 correction.resulting_position,
                 self.books,
