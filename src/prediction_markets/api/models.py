@@ -429,7 +429,7 @@ class ExecutionJournalOut(BaseModel):
 
 
 class PnlPointOut(BaseModel):
-    """Represent one consolidated venue PnL observation."""
+    """Represent a cumulative USD result at its observation time."""
 
     observed_at: datetime
     net_pnl_usd: Decimal
@@ -446,7 +446,14 @@ class InternalVenuePnlOut(BaseModel):
 
 
 class InternalPnlSummaryOut(BaseModel):
-    """Summarize all-time PnL calculated from terminal bot executions."""
+    """Summarize locked execution results and separately recorded inventory costs.
+
+    Notes
+    -----
+    ``net_pnl_usd`` and ``series`` deduct trading fees. The ``net_after_gas``
+    fields additionally deduct known inventory transaction costs, including
+    operations that prepared inventory for trades which have not occurred.
+    """
 
     scope: Literal["bot_terminal_executions_all_time"] = (
         "bot_terminal_executions_all_time"
@@ -458,6 +465,11 @@ class InternalPnlSummaryOut(BaseModel):
     unpriced_terminal_executions: int
     venues: list[InternalVenuePnlOut]
     series: list[PnlPointOut]
+    gas_usd: Decimal | None = None
+    net_after_gas_usd: Decimal | None = None
+    unpriced_inventory_operations: int = 0
+    net_after_gas_series: list[PnlPointOut] = Field(default_factory=list)
+    executions: list[ExecutionJournalOut] = Field(default_factory=list)
 
 
 class PnlDashboardOut(BaseModel):

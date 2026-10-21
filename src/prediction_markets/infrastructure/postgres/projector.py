@@ -78,6 +78,7 @@ from prediction_markets.domain.trading.portfolio import STRATEGY_PORTFOLIO_ID
 from prediction_markets.domain.trading.value_objects import OrderBookDecisionSnapshot
 from prediction_markets.domain.trading.entities import ExposureRecovery
 from prediction_markets.infrastructure.binary_journal import BinaryJournal, JournalEntry
+from prediction_markets.infrastructure.postgres.inventory_costs import read_inventory_costs
 from prediction_markets.infrastructure.postgres.repositories import (
     PostgresIncidentRepository,
     PostgresNotificationDeliveryRepository,
@@ -930,6 +931,8 @@ def _project_bot_pnl(
     -----
     - Unrealized and fees sum only known USD components so the series stays
       plottable while ``partial`` / quality flags expose missing marks or fees.
+    - Gas comes from deduplicated inventory-operation costs, independently of
+      position balances and trading-fee corrections.
     """
     position_row = cursor.execute(
         """
@@ -1163,7 +1166,7 @@ def _project_bot_pnl(
     (
         realized,
         unrealized,
-        position_fees,
+        _position_fees,
         trading_fees,
         missing_mark,
         missing_fees,
@@ -1173,13 +1176,18 @@ def _project_bot_pnl(
     movement_count, movement_fees, missing_movement_fees, mixed_movement_fees = (
         movement_row
     )
-    fees = position_fees + (movement_fees if movement_count else Decimal("0"))
-    gas = max(position_fees - trading_fees, Decimal("0"))
+    inventory_costs = read_inventory_costs(cursor)
+    gas = sum(
+        (cost.amount_usd for cost in inventory_costs if cost.amount_usd is not None),
+        Decimal("0"),
+    )
+    fees = trading_fees + gas + (movement_fees if movement_count else Decimal("0"))
+    missing_inventory_costs = any(cost.amount_usd is None for cost in inventory_costs)
     flags = [
         flag
         for flag, present in (
             ("MISSING_MARK", missing_mark),
-            ("MISSING_FEES", missing_fees or missing_movement_fees),
+            ("MISSING_FEES", missing_fees or missing_movement_fees or missing_inventory_costs),
             ("INCONSISTENT_FEE_CURRENCY", mixed_fees or mixed_movement_fees),
         )
         if present
@@ -1539,6 +1547,8 @@ def _inventory_operation_summary(record: object) -> dict[str, object]:
             if reference is not None
             else None
         ),
+        "portfolio_id": str(reference.portfolio_id) if reference is not None else None,
+        "snapshot_status": snapshot.status.value if snapshot is not None else None,
         "action": (
             getattr(intent, "action", None).value
             if getattr(intent, "action", None) is not None

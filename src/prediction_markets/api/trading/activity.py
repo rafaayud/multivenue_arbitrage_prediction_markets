@@ -58,6 +58,10 @@ from prediction_markets.domain.trading.enums import (
 )
 from prediction_markets.domain.trading.entities import ArbitrageExecutionJournal
 from prediction_markets.domain.trading.entities import ExposureRecovery
+from prediction_markets.infrastructure.postgres.inventory_costs import (
+    InventoryCost,
+    read_inventory_costs,
+)
 from prediction_markets.infrastructure.postgres.repositories import (
     PostgresArbitrageExecutionJournalRepository,
     PostgresExposureRecoveryRepository,
@@ -256,18 +260,24 @@ class TradingActivityReader:
         self,
         connection: psycopg.Connection,
     ) -> tuple[Decimal, Decimal]:
+        """Read trading fees and operation-based gas without inferring gas from positions."""
         row = connection.execute(
             """
-            SELECT trading_fees_usd, gas_usd
+            SELECT trading_fees_usd
             FROM pnl_performance_points
             WHERE source = 'bot_ledger' AND venue_id IS NULL
             ORDER BY observed_at DESC, point_id DESC
             LIMIT 1
             """
         ).fetchone()
-        if row is None:
-            return Decimal("0"), Decimal("0")
-        return row[0] or Decimal("0"), row[1] or Decimal("0")
+        gas = sum(
+            (
+                cost.amount_usd for cost in read_inventory_costs(connection)
+                if cost.amount_usd is not None
+            ),
+            Decimal("0"),
+        )
+        return (row[0] or Decimal("0")) if row else Decimal("0"), gas
 
     def internal_pnl(self) -> InternalPnlSummaryOut:
         """Return cached all-time PnL from terminal executions.
@@ -498,7 +508,7 @@ class TradingActivityReader:
                 confidence="high" if comparable and source == "bot_ledger" else "low",
                 notes=notes,
             ),
-            partial=partial or latest is None or bool(latest[5]),
+            partial=partial or latest is None or bool(latest[6]),
             last_updated=last_updated,
             quality_flags=flags,
         )
@@ -597,10 +607,12 @@ class TradingActivityReader:
             trades = PostgresTradeRepository(connection).list_by_client_orders(
                 _journal_client_order_ids(journals, recoveries),
             )
+            inventory_costs = read_inventory_costs(connection)
+            market_metadata = _journal_markets(connection, journals)
         outputs = [
             _journal_out(
                 journal,
-                None,
+                market_metadata.get(journal.id),
                 trades,
                 None,
                 recovery_by_execution.get(journal.id),
@@ -616,6 +628,7 @@ class TradingActivityReader:
             outputs,
             recovery_outputs,
             terminal_execution_count=len(completed) + len(recovered),
+            inventory_costs=inventory_costs,
         )
 
 
@@ -1035,6 +1048,7 @@ def _internal_pnl_out(
     recoveries: list[ExposureRecoveryOut] | tuple[ExposureRecoveryOut, ...] = (),
     *,
     terminal_execution_count: int | None = None,
+    inventory_costs: tuple[InventoryCost, ...] = (),
 ) -> InternalPnlSummaryOut:
     """Aggregate fee-normalized terminal execution PnL.
 
@@ -1047,6 +1061,8 @@ def _internal_pnl_out(
     terminal_execution_count
         Total completed and recovered execution count, including records whose
         financial details are incomplete.
+    inventory_costs
+        Deduplicated inventory transaction costs; unknown USD values are flagged.
 
     Returns
     -------
@@ -1167,11 +1183,31 @@ def _internal_pnl_out(
         )
         for venue_id in sorted(executions_by_venue)
     ]
-    gross = sum(gross_by_venue.values(), Decimal("0"))
-    fees = sum(fees_by_venue.values(), Decimal("0"))
+    gross = sum((journal.gross_locked_pnl_usd for journal in priced), Decimal("0"))
+    fees = sum(
+        (journal.total_fee_settlement_cost_usd for journal in priced), Decimal("0")
+    )
+    gas = sum(
+        (cost.amount_usd for cost in inventory_costs if cost.amount_usd is not None),
+        Decimal("0"),
+    )
+    net_events: defaultdict[datetime, Decimal] = defaultdict(lambda: Decimal("0"))
+    for observed_at, _event_id, net_pnl in pnl_events:
+        assert net_pnl is not None
+        net_events[observed_at] += net_pnl
+    for cost in inventory_costs:
+        if cost.amount_usd is not None and cost.amount_usd != 0:
+            net_events[cost.observed_at] -= cost.amount_usd
+    net_after_gas_series: list[PnlPointOut] = []
+    running_net = Decimal("0")
+    for observed_at, change in sorted(net_events.items()):
+        running_net += change
+        net_after_gas_series.append(
+            PnlPointOut(observed_at=observed_at, net_pnl_usd=running_net)
+        )
     terminal_count = terminal_execution_count
     if terminal_count is None:
-        terminal_count = len(journals) + len(recoveries)
+        terminal_count = len(journals)
     return InternalPnlSummaryOut(
         gross_pnl_usd=gross,
         fees_usd=fees,
@@ -1183,6 +1219,17 @@ def _internal_pnl_out(
         ),
         venues=venues,
         series=series,
+        gas_usd=gas,
+        net_after_gas_usd=gross - fees - gas,
+        unpriced_inventory_operations=sum(
+            cost.amount_usd is None for cost in inventory_costs
+        ),
+        net_after_gas_series=net_after_gas_series,
+        executions=sorted(
+            journals,
+            key=lambda journal: (journal.updated_at, journal.execution_id),
+            reverse=True,
+        ),
     )
 
 

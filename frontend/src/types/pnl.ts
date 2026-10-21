@@ -49,6 +49,20 @@ export interface LedgerPosition {
   updated_at: string | null
 }
 
+/** Execution results are locked at completion, independently of event settlement. */
+export interface PnlExecution {
+  execution_id: string
+  status: string
+  underlying: string | null
+  monitor_key: string | null
+  updated_at: string
+  gross_locked_pnl_usd: string | null
+  total_fee_settlement_cost_usd: string | null
+  net_locked_pnl_usd: string | null
+  leg1: { venue_id: string; contract_id: string; side: string; filled_quantity: string }
+  leg2: { venue_id: string; contract_id: string; side: string; filled_quantity: string }
+}
+
 export interface PnlDashboard {
   generated_at: string
   portfolio_performance: {
@@ -65,6 +79,11 @@ export interface PnlDashboard {
     net_pnl_usd: string
     priced_terminal_executions: number
     unpriced_terminal_executions: number
+    gas_usd: string | null
+    net_after_gas_usd: string | null
+    unpriced_inventory_operations: number
+    net_after_gas_series: PnlPoint[]
+    executions: PnlExecution[]
   }
   reconciliation: {
     internal_net_pnl_usd: string | null

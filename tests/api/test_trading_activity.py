@@ -33,6 +33,7 @@ from prediction_markets.api.models import (
     TradeOut,
 )
 from prediction_markets.api.trading_main import app as trading_app
+from prediction_markets.infrastructure.postgres.inventory_costs import InventoryCost
 from prediction_markets.api.trading.activity import (
     TradingActivityReader,
     _internal_pnl_out,
@@ -277,6 +278,10 @@ class _Reader:
             net_pnl_usd=Decimal("1"),
             priced_terminal_executions=1,
             unpriced_terminal_executions=0,
+            gas_usd=Decimal("0.02"),
+            net_after_gas_usd=Decimal("0.98"),
+            net_after_gas_series=[PnlPointOut(observed_at=_NOW, net_pnl_usd=Decimal("0.98"))],
+            executions=[_JOURNAL],
             venues=[
                 InternalVenuePnlOut(
                     venue_id="POLYMARKET",
@@ -417,6 +422,11 @@ def test_reads_consolidated_venue_pnl() -> None:
     assert payload["venue_health"][0]["scope"] == "all_time + current_positions"
     assert payload["venue_health"][0]["missing_fees"] is True
     assert payload["positions"][0]["position_id"] == "position-1"
+    terminal = payload["terminal_executions"]
+    assert terminal["gas_usd"] == "0.02"
+    assert terminal["net_after_gas_usd"] == "0.98"
+    assert terminal["net_after_gas_series"][-1]["net_pnl_usd"] == "0.98"
+    assert terminal["executions"][0]["execution_id"] == _JOURNAL.execution_id
 
 
 def test_records_explicit_accounting_correction() -> None:
@@ -652,19 +662,53 @@ def test_internal_pnl_cache_deduplicates_concurrent_database_reads(
     assert calls == 1
 
 
-def test_activity_fees_read_the_latest_projected_bot_point() -> None:
+@pytest.mark.parametrize(
+    ("total", "partial"),
+    [(Decimal("3.25"), False), (Decimal("-2"), False), (Decimal("0"), True)],
+)
+def test_performance_uses_data_quality_flag_independently_of_profit(
+    monkeypatch, total: Decimal, partial: bool,
+) -> None:
+    """Preserve net results and cost separation without treating profit as missing data."""
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [(
+        _NOW, total + Decimal("1.25"), Decimal("-0.5"),
+        Decimal("0.75"), Decimal("0.05"), total, partial,
+        ["MISSING_FEES"] if partial else [],
+    )]
+    connect = MagicMock()
+    connect.return_value.__enter__.return_value = connection
+    monkeypatch.setattr("prediction_markets.api.trading.activity.psycopg.connect", connect)
+
+    view = TradingActivityReader("unused").performance_view(
+        source="bot_ledger", requested_range="ALL", comparable=True,
+        notes=[], partial=False,
+    )
+
+    assert view.partial is partial
+    assert view.summary.fees == Decimal("0.70")
+    assert view.summary.gas == Decimal("0.05")
+    assert view.summary.total == total
+    assert view.series[0].net_pnl_usd == total
+
+
+def test_activity_fees_read_trading_fees_and_durable_inventory_costs() -> None:
     reader = TradingActivityReader("unused")
     connection = Mock()
     connection.execute.return_value.fetchone.return_value = (
         Decimal("0.4"),
-        Decimal("0.1"),
+        Decimal("999"),
     )
+    connection.execute.return_value.fetchall.return_value = [(_NOW, {
+        "operation_id": "split-1", "venue_id": "LIMITLESS",
+        "fee_settlement_cost": {"amount": "0.1", "currency": "USD"},
+    })]
 
     assert reader._latest_activity_fees(connection) == (
         Decimal("0.4"),
         Decimal("0.1"),
     )
-    statement = connection.execute.call_args.args[0]
+    statement = connection.execute.call_args_list[0].args[0]
     assert "FROM pnl_performance_points" in statement
     assert "FROM trades" not in statement
     assert "FROM positions" not in statement
@@ -674,6 +718,7 @@ def test_activity_fees_default_to_zero_without_a_projected_point() -> None:
     reader = TradingActivityReader("unused")
     connection = Mock()
     connection.execute.return_value.fetchone.return_value = None
+    connection.execute.return_value.fetchall.return_value = []
 
     assert reader._latest_activity_fees(connection) == (
         Decimal("0"),
@@ -778,6 +823,25 @@ def test_completed_execution_reports_actual_fees_and_locked_pnl() -> None:
         (venue.net_contribution_usd for venue in internal.venues),
         Decimal("0"),
     ) == internal.net_pnl_usd
+
+    inventory_costs = (
+        InventoryCost("split-1", "LIMITLESS", _NOW, Decimal("0.0001")),
+        InventoryCost("split-2", "PREDICT", _NOW, None),
+    )
+    after_gas = _internal_pnl_out(
+        [result, result.model_copy(update={
+            "execution_id": "missing-fees", "net_locked_pnl_usd": None,
+        })],
+        inventory_costs=inventory_costs,
+    )
+    assert after_gas.gas_usd == Decimal("0.0001")
+    assert after_gas.net_after_gas_usd == Decimal("0.00064")
+    assert after_gas.priced_terminal_executions == 1
+    assert after_gas.unpriced_terminal_executions == 1
+    assert after_gas.unpriced_inventory_operations == 1
+    assert len(after_gas.executions) == 2
+    assert len(after_gas.net_after_gas_series) == 1
+    assert after_gas.net_after_gas_series[-1].net_pnl_usd == after_gas.net_after_gas_usd
 
     recovery = ExposureRecoveryOut(
         recovery_id="recovery-priced",
@@ -1037,3 +1101,4 @@ def test_zero_fill_recovery_uses_recorded_actual_net_when_trade_is_missing() -> 
     assert aggregate.gross_pnl_usd == Decimal("0.05")
     assert aggregate.fees_usd == Decimal("0.0308")
     assert aggregate.net_pnl_usd == Decimal("0.0192")
+    assert aggregate.unpriced_terminal_executions == 0

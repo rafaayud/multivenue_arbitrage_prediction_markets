@@ -56,6 +56,7 @@ from prediction_markets.infrastructure.postgres.projector import (
     _project_recovery,
     _project_trade,
     _summary,
+    _inventory_operation_summary,
     _validate_checkpoint,
 )
 
@@ -129,6 +130,31 @@ class _PnlCursor:
 
     def fetchone(self):
         return self.rows.pop(0)
+
+    def fetchall(self):
+        return [(Timestamp.now().value, {
+            "operation_id": "split-1", "venue_id": "LIMITLESS",
+            "fee_settlement_cost": {"amount": "0.1", "currency": "USD"},
+        })]
+
+
+def test_inventory_audit_records_cost_scope_and_terminal_status() -> None:
+    """Retain gas inputs without exposing opaque submission credentials."""
+    reference = SimpleNamespace(
+        operation_id="split-1", venue_id="LIMITLESS",
+        portfolio_id="cross-venue-arbitrage", recovery_data=b"private",
+    )
+    record = SimpleNamespace(snapshot=SimpleNamespace(
+        reference=reference, status=SimpleNamespace(value="confirmed"),
+        fee_settlement_cost=Money(Decimal("0.01"), Currency("USD")),
+    ))
+
+    summary = _inventory_operation_summary(record)
+
+    assert summary["portfolio_id"] == "cross-venue-arbitrage"
+    assert summary["snapshot_status"] == "confirmed"
+    assert summary["fee_settlement_cost"] == {"amount": "0.01", "currency": "USD"}
+    assert "private" not in json.dumps(summary)
 
 
 def test_projector_rejects_checkpoint_ahead_of_journal(tmp_path) -> None:
@@ -463,7 +489,7 @@ def test_trade_projection_retains_durable_journal_sequence() -> None:
     assert params[11] == 42
 
 
-def test_bot_pnl_point_persists_position_and_cash_fees() -> None:
+def test_bot_pnl_point_persists_trading_inventory_and_cash_fees() -> None:
     cursor = _PnlCursor()
     event = MarketMatchesUpdated(MarketCycle(Underlying("BTC"), 300), ())
     entry = JournalEntry(9, Timestamp.now(), event, b"")
@@ -482,6 +508,17 @@ def test_bot_pnl_point_persists_position_and_cash_fees() -> None:
         Decimal("0.1"),
         Decimal("2.4"),
     )
+
+    # A corrected trading fee changes PnL, never the already recorded gas.
+    corrected = _PnlCursor()
+    corrected.rows[0] = (
+        Decimal("2"), Decimal("1"), Decimal("0.5"), Decimal("0.45"),
+        False, False, False,
+    )
+    _project_bot_pnl(corrected, entry)
+    corrected_values = corrected.executions[-1][1]
+    assert corrected_values[6] == Decimal("0.1")
+    assert corrected_values[7] == Decimal("2.35")
 
 
 def test_bot_pnl_point_values_complementary_inventory_at_locked_payout() -> None:
