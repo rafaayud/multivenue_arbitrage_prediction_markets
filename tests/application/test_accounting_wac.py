@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from decimal import Decimal
 
+import pytest
+
 from prediction_markets.application.execution.accounting import (
+    ExecutionAccounting,
     _correction_event,
     apply_inventory_operation,
     apply_trade,
@@ -15,6 +18,7 @@ from prediction_markets.application.events import (
     InventoryOperationRecorded,
     MarketSettlementRecorded,
     PositionUpdated,
+    SubmitOrder,
     TradeRecorded,
 )
 from prediction_markets.application.state import TradingState
@@ -27,9 +31,12 @@ from prediction_markets.domain.outcome_inventory import (
     InventorySubmissionStatus,
     OutcomeInventoryAction,
     OutcomeInventoryBalance,
+    OutcomeInventoryIntent,
     OutcomeInventorySettlement,
+    PreparedInventoryOperation,
 )
 from prediction_markets.domain.shared.value_objects import (
+    ClientOrderID,
     ContractID,
     Currency,
     MarketID,
@@ -42,12 +49,17 @@ from prediction_markets.domain.shared.value_objects import (
     TradeID,
     VenueID,
 )
-from prediction_markets.domain.trading.entities import CashMovement, Portfolio, Trade
+from prediction_markets.domain.trading.entities import (
+    CashMovement, OrderIntent, OrderSnapshot, Portfolio, Trade,
+)
 from prediction_markets.domain.trading.enums import (
     CashMovementKind,
     OrderSide,
+    OrderStatus,
+    OrderType,
     PositionSide,
 )
+from prediction_markets.domain.trading.value_objects import TradingFee
 
 
 _NOW = Timestamp(datetime(2026, 8, 26, tzinfo=timezone.utc))
@@ -117,6 +129,91 @@ def test_wac_exact_close_and_long_to_short_flip() -> None:
     assert closed.realized_pnl == Decimal("0.5")
 
 
+@pytest.mark.parametrize("venue", ["PREDICT", "LIMITLESS"])
+def test_token_fee_reduces_inventory_without_double_charging_pnl(venue: str) -> None:
+    """Retain gross fills while matching wallet tokens and actual cash economics."""
+    opening = _trade("opening", OrderSide.BUY, "30", "0.5", venue=venue)
+    fee = Decimal("0.062812089356110381")
+    buy = replace(
+        _trade("buy", OrderSide.BUY, "10", "0.761", venue=venue, fee=str(fee)),
+        fee=Money(fee, Currency("OUTCOME_TOKEN")),
+    )
+    position = apply_trade(apply_trade(None, opening).position, buy).position
+    marked = position.with_mark(Price(Decimal("0.8")), _NOW)
+
+    assert buy.quantity.value == 10
+    assert buy.fee_settlement_cost.amount == fee
+    assert marked.quantity.value == Decimal("40") - fee
+    assert marked.fees.amount == fee * buy.price.value
+    expected_net = marked.quantity.value * Decimal("0.8") - Decimal("22.61")
+    assert abs(marked.realized_pnl + marked.unrealized_pnl - marked.fees.amount - expected_net) < Decimal("1e-24")
+
+    closed = apply_trade(
+        position,
+        _trade("sell", OrderSide.SELL, str(position.quantity.value), "0.8", venue=venue),
+    ).position
+    assert closed.side is PositionSide.FLAT
+    assert abs(closed.realized_pnl - closed.fees.amount - expected_net) < Decimal("1e-24")
+
+
+def test_late_token_fee_preserves_intervening_inventory_and_is_idempotent() -> None:
+    """Consume only the newly reported fee, keeping subsequent split economics."""
+    split = _inventory_snapshot(
+        "split", OutcomeInventoryAction.SPLIT,
+        _inventory_balance("0", "0", "30"), _inventory_balance("30", "30", "0"),
+    )
+    buy = replace(_trade("buy", OrderSide.BUY, "10", "0.4", fee=None), contract_id=ContractID("yes"))
+    state = TradingState()
+    state.apply(TradeRecorded(buy))
+    state.apply(PositionUpdated(apply_trade(None, buy).position))
+    state.apply(InventoryOperationRecorded(split))
+    corrected = replace(
+        buy, fee=Money(Decimal("0.1"), Currency("OUTCOME_TOKEN")),
+        fee_settlement_cost=Money(Decimal("0.1"), _USD),
+    )
+    event = _correction_event(state, buy, corrected)
+    state.apply(event)
+    position = state.positions[event.correction.resulting_position.id]
+    state.apply(event)
+    assert state.positions[position.id] == position
+    assert position.quantity.value == Decimal("39.9")
+    marked = position.with_mark(Price(Decimal("0.7")), _NOW)
+    assert marked.realized_pnl + marked.unrealized_pnl - marked.fees.amount == Decimal("8.93")
+    assert state.positions[PositionID("POLYMARKET:bot:no")].quantity.value == 30
+
+
+def test_late_cumulative_token_fee_excludes_fees_of_previous_partial_fills() -> None:
+    """A cumulative fee update must not charge the earlier fill a second time."""
+    state = TradingState()
+    accounting = ExecutionAccounting(state)
+    intent = OrderIntent(
+        ContractID("yes"), OrderSide.BUY, Quantity(Decimal("10")), OrderType.LIMIT,
+        client_order_id=ClientOrderID("buy"), limit_price=Price(Decimal("0.4")),
+        portfolio_id=PortfolioID("bot"),
+    )
+    command = SubmitOrder("execution", "primary", VenueID("PREDICT"), intent)
+    first = OrderSnapshot(
+        OrderStatus.PARTIALLY_FILLED, intent.contract_id, intent.side, intent.quantity,
+        intent.order_type, client_order_id=intent.client_order_id,
+        filled_quantity=Quantity(Decimal("5")), average_price=intent.limit_price,
+        fee=TradingFee(Money(Decimal("0.05"), Currency("OUTCOME_TOKEN")), Money(Decimal("0.05"), _USD)),
+        updated_at=_NOW,
+    )
+    second = replace(first, status=OrderStatus.FILLED, filled_quantity=intent.quantity)
+    late = replace(second, fee=TradingFee(
+        Money(Decimal("0.1"), Currency("OUTCOME_TOKEN")), Money(Decimal("0.1"), _USD),
+    ))
+    for previous, current in ((None, first), (first, second), (second, late)):
+        for event in accounting.record(command, previous, current, None):
+            state.apply(event)
+    position = state.positions[PositionID("PREDICT:bot:yes")]
+    assert position.quantity.value == Decimal("9.9")
+    assert position.fees.amount == Decimal("0.04")
+    assert sum(trade.quantity.value for trade in state.trades.values()) == 10
+    assert sum(trade.fee.amount for trade in state.trades.values()) == Decimal("0.1")
+    assert accounting.record(command, late, late, None) == ()
+
+
 def test_accounting_correction_replays_later_partial_close() -> None:
     opened = replace(
         _trade("buy-1", OrderSide.BUY, "10", "0.40"),
@@ -136,6 +233,35 @@ def test_accounting_correction_replays_later_partial_close() -> None:
     assert position.quantity == Quantity(Decimal("6"))
     assert position.average_price == Price(Decimal("0.50"))
     assert position.realized_pnl == Decimal("1.20")
+
+
+def test_token_fee_correction_replays_prepared_and_confirmed_splits() -> None:
+    """Only confirmed split economics enter a fee-corrected position."""
+    split = _inventory_snapshot(
+        "split", OutcomeInventoryAction.SPLIT,
+        _inventory_balance("0", "0", "30"), _inventory_balance("30", "30", "0"),
+    )
+    buy = replace(_trade("buy", OrderSide.BUY, "10", "0.4"), contract_id=ContractID("yes"))
+    corrected = replace(
+        buy, fee=Money(Decimal("0.1"), Currency("OUTCOME_TOKEN")),
+        fee_settlement_cost=Money(Decimal("0.1"), _USD),
+    )
+    prepared = PreparedInventoryOperation(
+        OutcomeInventoryIntent(
+            split.reference.operation_id, split.reference.venue_id,
+            MarketID("market-1"), OutcomeInventoryAction.SPLIT, Quantity(Decimal("30")),
+        ),
+        split.reference, b"request",
+    )
+    position = rebuild_corrected_position((
+        InventoryOperationRecorded(prepared),
+        InventoryOperationRecorded(split),
+        TradeRecorded(buy),
+    ), corrected)
+    assert position.quantity.value == Decimal("39.9")
+    assert position.fees.amount == Decimal("0.04")
+    marked = position.with_mark(Price(Decimal("0.7")), _NOW)
+    assert marked.realized_pnl + marked.unrealized_pnl - marked.fees.amount == Decimal("8.93")
 
 
 def test_short_unrealized_pnl_is_signed_and_portfolios_are_venue_scoped() -> None:
