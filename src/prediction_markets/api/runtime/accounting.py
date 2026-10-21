@@ -9,7 +9,7 @@ Responsibilities
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal, ROUND_DOWN
 from uuid import uuid4
@@ -32,7 +32,7 @@ from prediction_markets.application.execution.accounting import (
     manual_resolution_trade_id,
     rebuild_corrected_position,
 )
-from prediction_markets.application.pipeline import JournalRecord, TradingPipeline
+from prediction_markets.application.pipeline import TradingPipeline
 from prediction_markets.application.state import EventDispatcher, TradingState
 from prediction_markets.domain.shared.value_objects import (
     Currency,
@@ -68,14 +68,12 @@ class RuntimeAccounting:
         state: TradingState,
         dispatcher: EventDispatcher,
         pipeline: TradingPipeline,
-        recovery_records: Callable[[], tuple[JournalRecord, ...]],
         execution: Mapping[VenueID, ExecutionPort],
     ) -> None:
         self.journal = journal
         self.state = state
         self.dispatcher = dispatcher
         self.pipeline = pipeline
-        self._recovery_records = recovery_records
         self._execution = dict(execution)
 
     async def reconcile_execution(
@@ -530,9 +528,22 @@ class RuntimeAccounting:
         *,
         correction_id: str | None = None,
     ) -> AccountingCorrection:
-        """Replace one trade and rebuild its position from durable economics."""
+        """Replace one trade using the original chronological journal.
+
+        Raises
+        ------
+        RuntimeError
+            If the journal is unavailable or its original history was pruned.
+
+        Notes
+        -----
+        - Recovery snapshots group trades and inventory operations by type;
+          they restore live state but cannot reproduce historical WAC order.
+        """
         if self.journal is None or self.state is None:
             raise RuntimeError("Arbitrage journal is not initialized")
+        if self.journal.retained_through_sequence > 0:
+            raise RuntimeError("Accounting corrections require complete chronological journal history")
         original = self.state.trades.get(replacement.id)
         if original is None:
             raise KeyError(str(replacement.id))
@@ -547,7 +558,7 @@ class RuntimeAccounting:
         ):
             raise ValueError("Accounting corrections cannot move trades")
         position = rebuild_corrected_position(
-            tuple(record.event for record in self._recovery_records()),
+            tuple(record.event for record in self.journal.entries()),
             replacement,
         )
         current = self.state.positions.get(position.id)

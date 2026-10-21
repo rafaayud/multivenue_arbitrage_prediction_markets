@@ -793,7 +793,6 @@ def test_manual_completion_clears_residual_exposure_durably() -> None:
             runtime.state,
             EventDispatcher(runtime.state),
             runtime.pipeline,
-            lambda: (),
             {},
         )
         resolved_at = Timestamp.now()
@@ -905,7 +904,7 @@ def test_manual_inventory_sale_ignores_failed_unwind_venue(reverse_legs) -> None
         event_loop = _EventLoop(state)
         accounting = RuntimeAccounting(
             None, state, EventDispatcher(state),
-            SimpleNamespace(event_loop=event_loop), lambda: (), {},
+            SimpleNamespace(event_loop=event_loop), {},
         )
         # An unrelated or undersized position must not authorize completion.
         state.positions[position.id] = replace(position, quantity=Quantity(Decimal("4")))
@@ -1009,7 +1008,6 @@ def test_manual_completion_stops_when_late_fill_resolves_execution(cancelled_uns
             state,
             EventDispatcher(state),
             SimpleNamespace(event_loop=event_loop),
-            lambda: (),
             {
                 venue_id: SimpleNamespace(
                     reconcile=lambda received: ReconciliationResult(
@@ -1109,7 +1107,6 @@ def test_reconciliation_refreshes_a_settled_fill_with_missing_fees() -> None:
             state,
             EventDispatcher(state),
             SimpleNamespace(event_loop=event_loop),
-            lambda: (),
             {
                 venue_id: SimpleNamespace(
                     reconcile=lambda received: ReconciliationResult(
@@ -1221,7 +1218,7 @@ def _predict_rounding_review():
 
     loop = _ReconciliationLoop()
     accounting = RuntimeAccounting(None, state, EventDispatcher(state),
-        SimpleNamespace(event_loop=loop), lambda: (), {})
+        SimpleNamespace(event_loop=loop), {})
     return accounting, execution, recovery, loop
 
 

@@ -333,7 +333,6 @@ class ArbitrageRuntime:
                 self.state,
                 self.dispatcher,
                 self.pipeline,
-                self._persistence.recovery_records,
                 self._execution,
             )
             entries = self._persistence.recovery_records()
