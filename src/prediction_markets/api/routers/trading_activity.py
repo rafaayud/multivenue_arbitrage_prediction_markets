@@ -28,6 +28,7 @@ from prediction_markets.api.models import (
     ExposureRecoveryOut,
     ManualExecutionResolutionIn,
     ManualExecutionResolutionOut,
+    ManualInventoryImportIn,
     ManualSplitImportIn,
     OrderOut,
     PnlDashboardOut,
@@ -459,6 +460,39 @@ async def import_manual_splits(
         {
             "venue_id": str(snapshot.reference.venue_id),
             "market_id": str(snapshot.reference.balance_before.market_id),
+            "quantity": str(snapshot.quantity.value),
+        }
+        for snapshot in snapshots
+    ]
+
+
+@runtime_router.post("/runtime/inventory/manual-operations", dependencies=_PROTECTED)
+async def import_manual_inventory(
+    value: ManualInventoryImportIn,
+    runtime: Annotated[ArbitrageRuntime, Depends(get_arbitrage_runtime)],
+) -> list[dict[str, object]]:
+    """Account for declared manual splits and merges from current token deltas.
+
+    Notes
+    -----
+    - Requires the trading key and an explicit declaration of manual operations.
+      Reads venue balances without submitting transactions or enabling trading.
+      Costs remain unknown unless the operator confirms no fees were paid.
+    - Returns net adjustments at import time, not historical receipts. HTTP 409
+      indicates busy trading or balances that cannot be reconciled safely.
+    """
+    try:
+        snapshots = await runtime.import_manual_inventory(
+            tuple(value.market_keys), fee_free=value.confirm_fee_free_operations,
+        )
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return [
+        {
+            "operation_id": str(snapshot.reference.operation_id),
+            "venue_id": str(snapshot.reference.venue_id),
+            "market_id": str(snapshot.reference.balance_before.market_id),
+            "action": snapshot.reference.action.value,
             "quantity": str(snapshot.quantity.value),
         }
         for snapshot in snapshots

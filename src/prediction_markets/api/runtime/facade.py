@@ -556,6 +556,17 @@ class ArbitrageRuntime:
             raise RuntimeError("Arbitrage runtime is not initialized")
         return await self._inventory.import_manual_splits(market_keys)
 
+    async def import_manual_inventory(
+        self,
+        market_keys: tuple[str, ...],
+        *,
+        fee_free: bool = False,
+    ) -> tuple[InventoryOperationSnapshot, ...]:
+        """Record declared splits and merges, leaving unconfirmed costs unknown."""
+        if self._inventory is None:
+            raise RuntimeError("Arbitrage runtime is not initialized")
+        return await self._inventory.import_manual_inventory(market_keys, fee_free=fee_free)
+
     async def reconcile_predict_inventory(
         self,
         operation_id: str,

@@ -606,7 +606,11 @@ def test_reconciles_pending_predict_inventory_by_transaction_hash() -> None:
     }
 
 
-def test_manual_split_import_requires_authentication_and_explicit_declaration() -> None:
+@pytest.mark.parametrize("path, declaration", [
+    ("/runtime/inventory/manual-splits", "confirm_fee_free_splits"),
+    ("/runtime/inventory/manual-operations", "confirm_manual_operations"),
+])
+def test_manual_split_import_requires_authentication_and_explicit_declaration(path, declaration) -> None:
     """Keep importing cost basis separate from starting a trading run."""
     calls = []
 
@@ -615,14 +619,18 @@ def test_manual_split_import_requires_authentication_and_explicit_declaration() 
             calls.append(keys)
             return ()
 
+        async def import_manual_inventory(self, keys, *, fee_free=False):
+            calls.append(keys)
+            assert fee_free is False
+            return ()
+
     trading_app.dependency_overrides[get_arbitrage_runtime] = Runtime
     try:
         with TestClient(trading_app) as client:
-            path = "/runtime/inventory/manual-splits"
-            body = {"market_keys": ["regular:selected"], "confirm_fee_free_splits": True}
+            body = {"market_keys": ["regular:selected"], declaration: True}
             assert client.post(path, json=body).status_code == 401
             headers = {"X-Trading-Key": "test-trading-key"}
-            for invalid in ({"market_keys": body["market_keys"]}, {**body, "confirm_fee_free_splits": False}, {**body, "market_keys": []}):
+            for invalid in ({"market_keys": body["market_keys"]}, {**body, declaration: False}, {**body, "market_keys": []}):
                 assert client.post(path, headers=headers, json=invalid).status_code == 422
             assert calls == []
             response = client.post(path, headers=headers, json=body)

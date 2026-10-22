@@ -288,6 +288,15 @@ class ManualSplitImportIn(BaseModel):
     confirm_fee_free_splits: Literal[True]
 
 
+class ManualInventoryImportIn(BaseModel):
+    """Declare manual splits or merges, keeping costs unknown unless confirmed free."""
+
+    model_config = ConfigDict(extra="forbid")
+    market_keys: list[str] = Field(min_length=1, max_length=100)
+    confirm_manual_operations: Literal[True]
+    confirm_fee_free_operations: bool = False
+
+
 class AccountingCorrectionIn(BaseModel):
     """Replace the economic fields of one existing trade."""
 

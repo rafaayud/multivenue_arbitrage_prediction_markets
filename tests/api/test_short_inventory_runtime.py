@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -10,6 +11,8 @@ import pytest
 from prediction_markets.api.runtime import ArbitrageRuntime
 from prediction_markets.api.runtime.inventory import (
     ShortInventoryCoordinator,
+    _accounted_short_quantity,
+    _manual_inventory_snapshot,
     _manual_split_snapshot,
     _legacy_short_position_repairs,
     _short_inventory_expiry_error,
@@ -17,7 +20,14 @@ from prediction_markets.api.runtime.inventory import (
 from prediction_markets.api.runtime.safety import RuntimeSafety, _VenueSafetyStop
 from prediction_markets.api.trading.runner import LiveArbitrageConfig
 from prediction_markets.application.engine import EngineConfig, TradingEngine
-from prediction_markets.application.events import MarketMatchesUpdated, PositionUpdated
+from prediction_markets.application.events import (
+    ArbitragePlanned,
+    ExecutionUpdated,
+    MarketMatchesUpdated,
+    OrderBookUpdated,
+    PositionUpdated,
+    SubmitOrder,
+)
 from prediction_markets.application.codec import decode_event
 from prediction_markets.application.markets.models import MarketCycle
 from prediction_markets.application.state import EventDispatcher, TradingState
@@ -53,7 +63,7 @@ from prediction_markets.domain.shared.value_objects import (
     VenueID,
 )
 from prediction_markets.domain.trading.entities import Position
-from prediction_markets.domain.trading.enums import PositionSide
+from prediction_markets.domain.trading.enums import ArbitrageExecutionStatus, PositionSide
 from prediction_markets.domain.venue_health import (
     VenueHealthSnapshot,
     VenueHealthStatus,
@@ -383,6 +393,106 @@ def test_rejects_physical_short_inventory_owned_by_legacy_portfolio() -> None:
         asyncio.run(coordinator.prepare(("cycle:BTC:3600",)))
 
 
+@pytest.mark.parametrize(("physical", "accounted", "expected"), [
+    ("30", "29.879455951881003022", "29.879455951881003022"),
+    ("20", "30", "20"),
+    ("0", "30", "0"),
+    ("30", "0", None),
+])
+def test_short_inventory_caps_the_selected_token_without_complete_sets(
+    physical: str, accounted: str, expected: str | None,
+) -> None:
+    """Cap sales by wallet and strategy ownership even with no opposite tokens."""
+    contract = _contract("selected-yes", "PREDICT")
+    portfolio_id = PortfolioID("cross-venue-arbitrage")
+    state = TradingState()
+    position_id = PositionID(f"{contract.venue_id}:{portfolio_id}:{contract.id}")
+    if Decimal(accounted) > 0:
+        state.positions[position_id] = Position(
+            id=position_id, contract_id=contract.id, portfolio_id=portfolio_id,
+            venue_id=contract.venue_id, side=PositionSide.LONG,
+            quantity=Quantity(Decimal(accounted)), average_price=Price(Decimal("0.5")),
+        )
+    balance = OutcomeInventoryBalance(
+        venue_id=contract.venue_id, market_id=contract.market_id,
+        yes=Quantity(Decimal(physical)), no=Quantity(Decimal("0")),
+        collateral=Money(Decimal("0"), Currency("USD")), observed_at=Timestamp.now(),
+        yes_contract_id=contract.id, no_contract_id=ContractID("opposite-no"),
+    )
+
+    if expected is None:
+        with pytest.raises(RuntimeError, match="not accounted in portfolio"):
+            _accounted_short_quantity(state, portfolio_id, contract, balance)
+    else:
+        assert _accounted_short_quantity(state, portfolio_id, contract, balance) == Quantity(Decimal(expected))
+
+
+def test_asymmetric_inventory_allows_another_sale_after_twelve_tokens_fill() -> None:
+    """Reproduce Bolsonaro balances through preparation and two SELL admissions."""
+    from tests.application.test_engine import _ZeroFees, _book, _contract as engine_contract, _process
+
+    left = engine_contract("poly-no", VenueID("POLYMARKET"), "no", tick_size="0.001", minimum_order_size="5")
+    right = engine_contract("predict-yes", VenueID("PREDICT"), "yes", tick_size="0.001")
+    pair = MatchedContractPair(left, right, Timestamp.now())
+    cycle = MarketCycle(Underlying("BTC"), 3600)
+    state = TradingState()
+    state.apply(MarketMatchesUpdated(cycle, (pair,)))
+    balances = []
+    for contract, yes, no, selected_is_yes in (
+        (left, "13", "42", False),
+        (right, "41.879455951881003022", "13", True),
+    ):
+        balance = OutcomeInventoryBalance(
+            venue_id=contract.venue_id, market_id=contract.market_id,
+            yes=Quantity(Decimal(yes)), no=Quantity(Decimal(no)),
+            collateral=Money(Decimal("0"), Currency("USD")), observed_at=Timestamp.now(),
+            yes_contract_id=contract.id if selected_is_yes else ContractID("poly-yes"),
+            no_contract_id=ContractID("predict-no") if selected_is_yes else contract.id,
+        )
+        balances.append(balance)
+        portfolio_id = PortfolioID("cross-venue-arbitrage")
+        position_id = PositionID(f"{contract.venue_id}:{portfolio_id}:{contract.id}")
+        state.positions[position_id] = Position(
+            id=position_id, contract_id=contract.id, venue_id=contract.venue_id,
+            portfolio_id=portfolio_id, side=PositionSide.LONG,
+            quantity=balance.yes if selected_is_yes else balance.no,
+            average_price=Price(Decimal("0.5")),
+        )
+
+    class Inventory(_Inventory):
+        """Return the recorded asymmetric balances without venue I/O."""
+
+        async def ensure_short_inventory(self, markets):
+            return tuple(balances)
+
+    coordinator = _inventory_coordinator(state, Inventory({}))
+    pair_keys, inventory = asyncio.run(coordinator.prepare(("cycle:BTC:3600",)))
+    assert inventory[left.id] == Quantity(Decimal("42"))
+    assert inventory[right.id] == Quantity(Decimal("41.879455951881003022"))
+
+    engine = TradingEngine(EventDispatcher(state), {left.venue_id: _ZeroFees(), right.venue_id: _ZeroFees()})
+    engine.enable(EngineConfig(
+        max_notional_by_venue={left.venue_id: Decimal("10"), right.venue_id: Decimal("10")},
+        max_arbitrages=3, execute_long=False, execute_short=True,
+        short_market_keys=frozenset({"cycle:BTC:3600"}), short_pair_keys=pair_keys,
+        short_inventory_by_contract=inventory, allowed_intervals_seconds=(3600,),
+        predict_limit_slippage_ticks=0, min_net_edge=Decimal("0.003"), max_skew_ms=1000,
+    ))
+    _process(engine, OrderBookUpdated(left.venue_id, left.id, _book(left, "0.22", "240", bid=True)))
+    first = _process(engine, OrderBookUpdated(right.venue_id, right.id, _book(right, "0.788", "240", bid=True)))
+    execution = next(event.execution for event in first if isinstance(event, ArbitragePlanned))
+    assert execution.leg1_quantity == execution.leg2_quantity == Quantity(Decimal("12"))
+    _process(engine, ExecutionUpdated(replace(
+        execution, status=ArbitrageExecutionStatus.COMPLETED,
+        leg1_filled_quantity=execution.leg1_quantity, leg2_filled_quantity=execution.leg2_quantity,
+    )))
+
+    second = _process(engine, OrderBookUpdated(right.venue_id, right.id, _book(right, "0.789", "240", bid=True)))
+    commands = [event for event in second if isinstance(event, SubmitOrder)]
+    assert len(commands) == 2
+    assert all(command.intent.quantity == Quantity(Decimal("12")) for command in commands)
+
+
 def test_manual_splits_preserve_basis_and_pnl_across_replay(tmp_path, monkeypatch) -> None:
     """Import a manual top-up once without submitting or changing realized profit."""
     left, right = _contract("left", "PREDICT"), _contract("right", "POLYMARKET")
@@ -496,8 +606,138 @@ def test_manual_splits_exclude_other_portfolios_and_reject_discrepancies(
         assert snapshot.reference.portfolio_id == target
 
 
+def test_manual_splits_and_merges_reconcile_once_and_replay(tmp_path, monkeypatch) -> None:
+    """Preserve WAC and cash proceeds for mixed imports without submitting transactions."""
+    left, right = _contract("split", "POLYMARKET"), _contract("merge", "PREDICT")
+    state = TradingState()
+    matched = MarketMatchesUpdated(
+        MarketCycle(Underlying("BTC"), 3600),
+        (MatchedContractPair(left, right, Timestamp.now()),),
+    )
+    state.apply(matched)
+    inventory = _Inventory({})
+    coordinator = _inventory_coordinator(state, inventory)
+    portfolio = coordinator.portfolio_id()
+    opening = []
+    for contract, yes, no in ((left, "17", "0"), (right, "74", "35")):
+        for contract_id, quantity, price in (
+            (contract.id, yes, "0.2"), (ContractID(f"{contract.id}-no"), no, "0.5"),
+        ):
+            position = Position(
+                id=PositionID(f"{contract.venue_id}:{portfolio}:{contract_id}"),
+                contract_id=contract_id, venue_id=contract.venue_id, portfolio_id=portfolio,
+                side=PositionSide.LONG if Decimal(quantity) else PositionSide.FLAT,
+                quantity=Quantity(Decimal(quantity)),
+                average_price=Price(Decimal(price)) if Decimal(quantity) else None,
+                realized_pnl=Decimal("1.25"), fees=Money(Decimal("0.02"), Currency("USD")),
+            )
+            opening.append(PositionUpdated(position))
+            state.apply(opening[-1])
+
+    async def balances(markets):
+        return tuple(
+            OutcomeInventoryBalance(
+                contract.venue_id, contract.market_id,
+                Quantity(Decimal(yes)), Quantity(Decimal(no)),
+                Money(Decimal("25"), Currency("USD")), Timestamp.now(),
+                contract.id, ContractID(f"{contract.id}-no"),
+            ) for contract, yes, no in ((left, "37", "20"), (right, "39", "0"))
+        )
+
+    monkeypatch.setattr(inventory, "get_balances", balances, raising=False)
+    path = tmp_path / "manual-operations.log"
+    journal = BinaryJournal(path)
+    coordinator.journal = journal
+    for event in (matched, *opening):
+        journal.append(event)
+    try:
+        sequence = journal.last_sequence
+        with pytest.raises(RuntimeError, match="unaccounted YES=-35, NO=-35"):
+            asyncio.run(coordinator.import_manual_splits(("cycle:BTC:3600",)))
+        assert journal.last_sequence == sequence
+
+        async def concurrent_imports():
+            return await asyncio.gather(
+                coordinator.import_manual_inventory(("cycle:BTC:3600",), fee_free=True),
+                coordinator.import_manual_inventory(("cycle:BTC:3600",), fee_free=True),
+            )
+
+        imported, duplicate = asyncio.run(concurrent_imports())
+        assert duplicate == ()
+        assert [(item.reference.action, item.quantity.value) for item in imported] == [
+            (OutcomeInventoryAction.SPLIT, Decimal("20")),
+            (OutcomeInventoryAction.MERGE, Decimal("35")),
+        ]
+        split = state.positions[opening[0].position.id]
+        merged = state.positions[opening[2].position.id]
+        assert split.quantity.value == Decimal("37")
+        assert split.average_price.value == Decimal("13.4") / 37
+        assert split.realized_pnl == Decimal("1.25")
+        assert merged.quantity.value == Decimal("39")
+        assert merged.average_price.value == Decimal("0.2")
+        assert merged.realized_pnl == Decimal("11.75")
+        assert state.positions[opening[3].position.id].side is PositionSide.FLAT
+        assert all(position.fees.amount == Decimal("0.02") for position in state.positions.values())
+        assert not inventory.calls
+    finally:
+        journal.close()
+
+    reopened = BinaryJournal(path)
+    try:
+        replayed = TradingState()
+        for entry in reopened.entries():
+            replayed.apply(decode_event(entry.payload))
+        assert replayed.positions == state.positions
+        restarted = _inventory_coordinator(replayed, inventory)
+        restarted.journal = reopened
+        sequence = reopened.last_sequence
+        assert asyncio.run(restarted.import_manual_inventory(("cycle:BTC:3600",))) == ()
+        assert reopened.last_sequence == sequence
+    finally:
+        reopened.close()
+
+
+def test_manual_merge_cannot_consume_another_portfolios_inventory() -> None:
+    """Reject a deficit that cannot be covered by the selected portfolio alone."""
+    venue, target = VenueID("PREDICT"), PortfolioID("cross-venue-arbitrage")
+    state = TradingState()
+    for portfolio, quantity in ((target, "5"), (PortfolioID("other"), "10")):
+        for contract in (ContractID("yes"), ContractID("no")):
+            position = Position(
+                id=PositionID(f"{venue}:{portfolio}:{contract}"),
+                contract_id=contract, venue_id=venue, portfolio_id=portfolio,
+                side=PositionSide.LONG, quantity=Quantity(Decimal(quantity)),
+                average_price=Price(Decimal("0.5")),
+            )
+            state.apply(PositionUpdated(position))
+    balance = OutcomeInventoryBalance(
+        venue, MarketID("market"), Quantity(Decimal("8")), Quantity(Decimal("8")),
+        Money(Decimal("0"), Currency("USDT")), Timestamp.now(),
+        ContractID("yes"), ContractID("no"),
+    )
+    with pytest.raises(RuntimeError, match="Manual merge exceeds accounted inventory"):
+        _manual_inventory_snapshot(state, balance, target)
+
+
+def test_manual_inventory_does_not_assume_unverified_fees_are_zero() -> None:
+    """Keep missing gas visible instead of declaring an external operation free."""
+    balance = OutcomeInventoryBalance(
+        VenueID("PREDICT"), MarketID("market"), Quantity(Decimal("20")),
+        Quantity(Decimal("20")), Money(Decimal("25"), Currency("USDT")),
+        Timestamp.now(), ContractID("yes"), ContractID("no"),
+    )
+    snapshot = _manual_inventory_snapshot(
+        TradingState(), balance, PortfolioID("cross-venue-arbitrage"),
+    )
+    assert snapshot.fee is None
+    assert snapshot.fee_settlement_cost is None
+    assert snapshot.fee_observed_at is None
+    assert snapshot.quality_flags == ("MISSING_FEES",)
+
+
 @pytest.mark.parametrize("busy", ["trading", "pending", "execution"])
-def test_manual_import_requires_idle_runtime(monkeypatch, busy) -> None:
+@pytest.mark.parametrize("method", ["import_manual_splits", "import_manual_inventory"])
+def test_manual_import_requires_idle_runtime(monkeypatch, busy, method) -> None:
     """Reject moving balances before any venue call or journal write."""
     state = TradingState(trading_enabled=busy == "trading")
     inventory = _Inventory({})
@@ -508,7 +748,7 @@ def test_manual_import_requires_idle_runtime(monkeypatch, busy) -> None:
     if busy == "execution":
         monkeypatch.setattr(coordinator.engine, "active_execution_count", lambda: 1)
     with pytest.raises(RuntimeError, match="Stop trading"):
-        asyncio.run(coordinator.import_manual_splits(("cycle:BTC:3600",)))
+        asyncio.run(getattr(coordinator, method)(("cycle:BTC:3600",)))
 
 
 def test_repairs_exact_legacy_long_and_strategy_short_books() -> None:
