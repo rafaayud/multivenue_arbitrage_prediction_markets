@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, test, vi } from "vitest"
+import { beforeEach, describe, expect, test, vi } from "vitest"
 
 import { TradingControl } from "@/components/runtime/trading-control"
 import { apiClient } from "@/lib/api-client"
@@ -31,13 +31,35 @@ function controller(
 }
 
 describe("TradingControl", () => {
-  test("registers declared manual splits without enabling trading", async () => {
+  beforeEach(() => localStorage.clear())
+
+  test("passes existing-token pairs without enabling collateral preparation", async () => {
+    const user = userEvent.setup()
+    const value = controller(null)
+    render(<TradingControl controller={value} existingInventoryPairs={[["poly-no", "predict-yes"]]} />)
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    expect(screen.getByText(/Sell existing inventory: 1 selected pair/)).toBeVisible()
+    expect(screen.queryByText(/Enabling trading can split and lock/)).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText("Trading API key"), "secret")
+    await user.click(screen.getByRole("checkbox", { name: /I understand this uses real funds/ }))
+    await user.click(screen.getByRole("button", { name: "Enable live trading" }))
+    expect(value.enable).toHaveBeenCalledWith("secret", expect.objectContaining({
+      short_market_keys: [], existing_inventory_pairs: [["poly-no", "predict-yes"]],
+    }))
+  })
+
+  test.each(["split", "existing"])("registers manual splits in %s mode without enabling trading", async (mode) => {
     const user = userEvent.setup()
     const value = controller(null)
     const importSplits = vi.spyOn(apiClient, "importManualSplits")
       .mockResolvedValueOnce([{ venue_id: "POLYMARKET", market_id: "market", quantity: "30" }])
       .mockResolvedValueOnce([])
-    render(<TradingControl controller={value} shortMarketKeys={["regular:selected"]} />)
+    render(<TradingControl
+      controller={value}
+      shortMarketKeys={mode === "split" ? ["regular:selected"] : []}
+      existingInventoryPairs={mode === "existing" ? [["poly-no", "predict-yes"]] : []}
+      manualInventoryMarketKeys={["regular:selected"]}
+    />)
     await user.click(screen.getByRole("button", { name: "Enable trading" }))
     const register = screen.getByRole("button", { name: "Register manual splits" })
     expect(register).toBeDisabled()
@@ -106,7 +128,7 @@ describe("TradingControl", () => {
   test("passes the selected execution count, venue budgets and profit requirements", async () => {
     const user = userEvent.setup()
     const value = controller(null)
-    render(
+    const view = render(
       <TradingControl
         controller={value}
         shortMarketKeys={["regular:selected"]}
@@ -157,6 +179,23 @@ describe("TradingControl", () => {
       max_recovery_loss: 0.5,
       short_market_keys: ["regular:selected"],
     })
+
+    view.unmount()
+    const stopped = controller("stopped")
+    render(<TradingControl controller={stopped} signalSettings={{ min_net_edge: 0, cost_buffer: 0 }} />)
+    await user.click(screen.getByRole("button", { name: "Enable trading" }))
+    for (const [label, amount] of [
+      ["Arbitrages before stop", 3], ["Concurrent arbitrages", 2],
+      ["Polymarket max (USDC)", 10], ["Limitless max (USDC)", 10],
+      ["Predict max (USDT)", 10], ["Recovery max loss (USD)", 0.5],
+      ["Minimum net edge (USD/contract)", 0.015], ["Cost buffer (USD/contract)", 0.005],
+    ] as const) {
+      expect(screen.getByLabelText(label)).toHaveValue(amount)
+    }
+    expect(screen.getByLabelText("Trading API key")).toHaveValue("")
+    expect(screen.getByRole("checkbox", { name: /I understand this uses real funds/ })).not.toBeChecked()
+    expect(stopped.enable).not.toHaveBeenCalled()
+    expect(localStorage.getItem("pm-trading-preferences-v1")).not.toContain("secret")
   })
 
   test("starts without Predict slippage or experimental pricing controls", async () => {

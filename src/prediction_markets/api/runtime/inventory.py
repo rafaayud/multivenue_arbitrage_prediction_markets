@@ -60,7 +60,7 @@ from prediction_markets.domain.shared.value_objects import (
     Timestamp,
     VenueID,
 )
-from prediction_markets.domain.trading.enums import PositionSide
+from prediction_markets.domain.trading.enums import OrderSide, PositionSide
 from prediction_markets.infrastructure.binary_journal import BinaryJournal
 from prediction_markets.infrastructure.fee_conversion import CoinGeckoFeeConverter
 from prediction_markets.infrastructure.venues.limitless.inventory import (
@@ -251,6 +251,66 @@ def _accounted_short_quantity(
             "paying gas, use Register manual splits in the trading dialog first.",
         )
     return Quantity(min(available.value, accounted))
+
+
+def _existing_inventory_selections(
+    state: TradingState,
+    pair_keys: tuple[tuple[str, str], ...],
+    split_market_keys: tuple[str, ...],
+) -> tuple[tuple[str, dict[VenueID, MarketID], tuple[MatchedContractPair, ...]], ...]:
+    """Resolve exact existing-token routes before any inventory operation.
+
+    Raises
+    ------
+    RuntimeError
+        If a route is not a current monitored event pair, or its event also
+        requests automatic splits. Rejecting overlap keeps the no-split choice
+        effective even when other events prepare collateral in the same run.
+    """
+    requested = {tuple(sorted(key)) for key in pair_keys}
+    found = set()
+    selections = []
+    for market, pairs in state.matches.items():
+        if not isinstance(market, RegularCandidate):
+            continue
+        selected = tuple(pair for pair in pairs if pair.key in requested)
+        if not selected:
+            continue
+        key = monitored_market_key(market)
+        if key in split_market_keys:
+            raise RuntimeError("Choose existing inventory or automatic splits for each event, not both")
+        selections.append(_short_inventory_selection(key, selected))
+        found.update(pair.key for pair in selected)
+    if found != requested:
+        raise RuntimeError("Existing inventory pair is not a current monitored event pair")
+    return tuple(selections)
+
+
+def _unreserved_short_quantity(
+    state: TradingState,
+    portfolio_id: PortfolioID,
+    contract: BinaryContract,
+    balance: OutcomeInventoryBalance,
+) -> Quantity:
+    """Cap wallet inventory to accounted tokens minus unsettled bot SELL orders.
+
+    Notes
+    -----
+    - Exact outcome identities are mandatory; complete-set fallbacks cannot
+      identify the selected token in existing-inventory mode.
+    - New orders reserve tokens in the engine after this startup observation.
+    """
+    if balance.yes_contract_id is None or balance.no_contract_id is None:
+        raise RuntimeError("Existing inventory requires identified YES and NO balances")
+    available = _accounted_short_quantity(state, portfolio_id, contract, balance)
+    reserved = sum((
+        max(order.quantity.value - order.filled_quantity.value, Decimal("0"))
+        for order in state.orders.values()
+        if order.contract_id == contract.id
+        and order.side is OrderSide.SELL
+        and (not order.is_terminal() or order.may_receive_more_fills is True)
+    ), Decimal("0"))
+    return Quantity(max(available.value - reserved, Decimal("0")))
 
 
 def _manual_split_snapshot(
@@ -491,11 +551,12 @@ class ShortInventoryCoordinator:
         market_keys: tuple[str, ...],
         *,
         minimum_time_remaining_seconds: int | None = None,
+        existing_inventory_pairs: tuple[tuple[str, str], ...] = (),
     ) -> tuple[
         frozenset[tuple[str, str]],
         dict[ContractID, Quantity],
     ]:
-        """Prepare complete sets for selected current markets before trading.
+        """Check existing-token routes and prepare explicitly requested split events.
 
         Parameters
         ----------
@@ -503,6 +564,9 @@ class ShortInventoryCoordinator:
             Stable monitored-market keys selected for covered short trading.
         minimum_time_remaining_seconds
             Default expiry guard applied before any inventory transaction.
+        existing_inventory_pairs
+            Exact complementary contract pairs restricted to current wallet and
+            accounted inventory. These events never prepare splits or top-ups.
 
         Returns
         -------
@@ -513,7 +577,13 @@ class ShortInventoryCoordinator:
             if self.state is None:
                 raise RuntimeError("Arbitrage runtime is not initialized")
             self._prepared_short_market_keys = ()
-            selections = _short_inventory_selections(
+            existing = _existing_inventory_selections(
+                self.state, existing_inventory_pairs, market_keys,
+            )
+            if existing:
+                self._require_idle_for_import()
+            existing_keys = {key for key, _, _ in existing}
+            selections = existing + _short_inventory_selections(
                 self.state,
                 market_keys,
                 minimum_time_remaining_seconds=minimum_time_remaining_seconds,
@@ -525,19 +595,28 @@ class ShortInventoryCoordinator:
                 await service.reconcile_pending(
                     tuple(self.state.pending_inventory_operations.values()),
                 )
-                for _, markets, pairs in selections:
-                    balances = await service.ensure_short_inventory(markets)
+                for key, markets, pairs in selections:
+                    balances = (
+                        await service.get_balances(markets)
+                        if key in existing_keys
+                        else await service.ensure_short_inventory(markets)
+                    )
                     balance_by_venue = {balance.venue_id: balance for balance in balances}
                     for pair in pairs:
                         for contract in (pair.left, pair.right):
+                            quantity = (
+                                _unreserved_short_quantity if key in existing_keys
+                                else _accounted_short_quantity
+                            )(
+                                self.state, self.portfolio_id(), contract,
+                                balance_by_venue[contract.venue_id],
+                            )
+                            if key in existing_keys and quantity.value <= 0:
+                                raise RuntimeError(
+                                    f"No available accounted tokens for selected SELL pair: {contract.id}",
+                                )
                             inventory_by_contract.setdefault(
-                                contract.id,
-                                _accounted_short_quantity(
-                                    self.state,
-                                    self.portfolio_id(),
-                                    contract,
-                                    balance_by_venue[contract.venue_id],
-                                ),
+                                contract.id, quantity,
                             )
             finally:
                 self._short_inventory_preparing = False

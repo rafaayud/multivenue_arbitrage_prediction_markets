@@ -331,6 +331,7 @@ def test_start_passes_execution_count_and_venue_budgets_to_runner() -> None:
                 "predict_limit_slippage_ticks": 0,
                 "predict_use_edge_budget": True,
                 "short_market_keys": ["cycle:BTC:3600"],
+                "existing_inventory_pairs": [["predict-fed-yes", "poly-fed-no"]],
             },
             headers=_headers(),
         )
@@ -347,6 +348,8 @@ def test_start_passes_execution_count_and_venue_budgets_to_runner() -> None:
         assert config.predict_use_edge_budget is True
         assert config.short_market_keys == ("cycle:BTC:3600",)
         assert response.json()["short_market_keys"] == ["cycle:BTC:3600"]
+        assert config.existing_inventory_pairs == (("predict-fed-yes", "poly-fed-no"),)
+        assert response.json()["existing_inventory_pairs"] == [["predict-fed-yes", "poly-fed-no"]]
 
 
 def test_preflight_endpoint_is_read_only() -> None:

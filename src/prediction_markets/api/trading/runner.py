@@ -62,6 +62,8 @@ class LiveArbitrageConfig:
     min_market_time_remaining_seconds: int = 120
     max_skew_ms: int = 1_000
     short_market_keys: tuple[str, ...] = ()
+    # Exact complementary contracts sold from existing inventory, without splits.
+    existing_inventory_pairs: tuple[tuple[str, str], ...] = ()
 
     def engine_config(self) -> EngineConfig:
         """Translate live-run fields into engine limits.

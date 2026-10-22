@@ -53,6 +53,7 @@ def _response(run: ExecutionRun) -> TradingRunOut:
         finished_at=run.finished_at,
         error=run.error,
         short_market_keys=run.config.short_market_keys,
+        existing_inventory_pairs=run.config.existing_inventory_pairs,
     )
 
 
@@ -204,6 +205,7 @@ async def start_trading_run(
         cost_buffer=body.cost_buffer,
         max_recovery_loss=body.max_recovery_loss,
         short_market_keys=body.short_market_keys,
+        existing_inventory_pairs=body.existing_inventory_pairs,
     )
     try:
         run = await manager.start(config)

@@ -754,7 +754,7 @@ class ArbitrageRuntime:
         self._signal_cost_buffer = config.cost_buffer
         pair_keys: frozenset[tuple[str, str]] = frozenset()
         short_inventory_by_contract: dict[ContractID, Quantity] = {}
-        if config.short_market_keys:
+        if config.short_market_keys or config.existing_inventory_pairs:
             if self._feed is None or any(
                 not isinstance(self._feed.monitored_market(key), RegularCandidate)
                 for key in config.short_market_keys
@@ -766,6 +766,7 @@ class ArbitrageRuntime:
                     minimum_time_remaining_seconds=(
                         config.min_market_time_remaining_seconds
                     ),
+                    existing_inventory_pairs=config.existing_inventory_pairs,
                 )
             )
             if stop_event.is_set():
@@ -812,6 +813,10 @@ class ArbitrageRuntime:
             replace(
                 config.engine_config(),
                 execute_short=bool(pair_keys),
+                short_market_keys=(
+                    frozenset(self._inventory.prepared_market_keys)
+                    if config.existing_inventory_pairs else frozenset(config.short_market_keys)
+                ),
                 short_pair_keys=pair_keys,
                 short_inventory_by_contract=short_inventory_by_contract,
                 collateral_by_venue=collateral_by_venue,

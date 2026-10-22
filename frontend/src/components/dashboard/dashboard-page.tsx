@@ -7,7 +7,7 @@ import {
   RadioTower,
   TriangleAlert,
 } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { StatusCard } from "@/components/dashboard/status-card"
 import { PageHeader } from "@/components/layout/page-header"
@@ -26,7 +26,26 @@ import { useArbitrageStream } from "@/features/arbitrage/arbitrage-stream-provid
 import { useRuntime } from "@/features/runtime/use-runtime"
 import { useBackendStatus } from "@/features/system/use-backend-status"
 import { useTradingRun } from "@/features/trading/use-trading-run"
+import { readTradingPreferences, saveTradingPreferences } from "@/features/trading/trading-preferences"
 import { formatTimestamp } from "@/lib/formatters"
+import type { MarketMatchPair } from "@/types/api"
+import type { InventorySellPair } from "@/types/trading"
+
+function inventoryPairKey(pair: MarketMatchPair): InventorySellPair {
+  return [pair.left.id, pair.right.id].sort() as InventorySellPair
+}
+
+function selectedInventoryPair(pair: MarketMatchPair, selected: InventorySellPair[]) {
+  const [left, right] = inventoryPairKey(pair)
+  return selected.some((key) => key.includes(left) && key.includes(right))
+}
+
+function sellPairLabel(pair: MarketMatchPair) {
+  return [pair.left, pair.right].map((contract) => {
+    const outcome = contract.outcome_id.match(/(?:^|:)(yes|no)(?=:|$)/i)?.[1]
+    return `${outcome?.toUpperCase() ?? "Outcome"} ${contract.venue_id}`
+  }).join(" + ")
+}
 
 /** Present selected policy events and their cross-venue observations. */
 export function DashboardPage() {
@@ -35,19 +54,47 @@ export function DashboardPage() {
   const trading = useTradingRun()
   const stream = useArbitrageStream()
   const [stoppingMonitor, setStoppingMonitor] = useState<string | null>(null)
-  const [shortMarketKeys, setShortMarketKeys] = useState<string[]>([])
+  const [savedSettings] = useState(readTradingPreferences)
+  const [shortMarketKeys, setShortMarketKeys] = useState<string[]>(savedSettings.short_market_keys ?? [])
+  const [inventoryPairs, setInventoryPairs] = useState<InventorySellPair[]>(savedSettings.existing_inventory_pairs ?? [])
+  const restoredRunId = useRef<string | null>(null)
   const regularMarkets = runtime.runtime?.regular_markets ?? []
   const tradingActive = ["preparing", "running", "stopping"].includes(
     trading.run?.status ?? "",
   )
-  const selectedShortMarketKeys = tradingActive
+  const selectedShortMarketKeys = (tradingActive
     ? (trading.run?.short_market_keys ?? shortMarketKeys)
-    : shortMarketKeys
+    : shortMarketKeys).filter((key) => regularMarkets.some((market) => market.monitor_key === key))
+  const selectedInventoryPairs = (tradingActive
+    ? (trading.run?.existing_inventory_pairs ?? [])
+    : inventoryPairs).filter((key) => regularMarkets.some((market) =>
+      market.pairs.some((pair) => selectedInventoryPair(pair, [key])),
+    ))
+  const manualInventoryMarketKeys = regularMarkets.filter((market) =>
+    selectedShortMarketKeys.includes(market.monitor_key)
+    || market.pairs.some((pair) => selectedInventoryPair(pair, selectedInventoryPairs)),
+  ).map((market) => market.monitor_key)
   const shortSelectionLocked =
     tradingActive || trading.requestState === "loading"
   const opportunities = stream.opportunities.filter(
     (opportunity) => opportunity.monitorType === "regular",
   )
+
+  useEffect(() => {
+    const run = trading.run
+    if (!run || restoredRunId.current === run.id) return
+    restoredRunId.current = run.id
+    if (!tradingActive && savedSettings.short_market_keys !== undefined) return
+    setShortMarketKeys(run.short_market_keys)
+    setInventoryPairs(run.existing_inventory_pairs ?? [])
+  }, [trading.run, tradingActive, savedSettings])
+
+  useEffect(() => {
+    saveTradingPreferences({
+      short_market_keys: shortMarketKeys,
+      existing_inventory_pairs: inventoryPairs,
+    })
+  }, [shortMarketKeys, inventoryPairs])
 
   async function unmonitor(monitorKey: string) {
     setStoppingMonitor(monitorKey)
@@ -56,6 +103,10 @@ export function DashboardPage() {
       setShortMarketKeys((current) =>
         current.filter((key) => key !== monitorKey),
       )
+      const removed = regularMarkets.find((market) => market.monitor_key === monitorKey)
+      setInventoryPairs((current) => current.filter((key) =>
+        !removed?.pairs.some((pair) => selectedInventoryPair(pair, [key])),
+      ))
     } finally {
       setStoppingMonitor(null)
     }
@@ -68,6 +119,26 @@ export function DashboardPage() {
         ? current.filter((key) => key !== monitorKey)
         : [...current, monitorKey],
     )
+  }
+
+  function toggleInventoryPair(pair: MarketMatchPair) {
+    if (shortSelectionLocked) return
+    setInventoryPairs((current) => selectedInventoryPair(pair, current)
+      ? current.filter((key) => !selectedInventoryPair(pair, [key]))
+      : [...current, inventoryPairKey(pair)],
+    )
+  }
+
+  function toggleAllInventoryPairs(pairs: MarketMatchPair[]) {
+    if (shortSelectionLocked) return
+    setInventoryPairs((current) => {
+      const otherPairs = current.filter((key) =>
+        !pairs.some((pair) => selectedInventoryPair(pair, [key])),
+      )
+      return pairs.every((pair) => selectedInventoryPair(pair, current))
+        ? otherPairs
+        : [...otherPairs, ...pairs.map(inventoryPairKey)]
+    })
   }
 
   const connectionTone =
@@ -88,6 +159,8 @@ export function DashboardPage() {
             controller={trading}
             signalSettings={runtime.runtime?.signal_settings}
             shortMarketKeys={selectedShortMarketKeys}
+            existingInventoryPairs={selectedInventoryPairs}
+            manualInventoryMarketKeys={manualInventoryMarketKeys}
           />
         }
       />
@@ -246,9 +319,10 @@ export function DashboardPage() {
                         aria-pressed={selectedShortMarketKeys.includes(
                           market.monitor_key,
                         )}
-                        title="Prepare covered short collateral when trading starts"
+                        title="Prepare collateral with splits for this event. Disable existing-inventory pairs first."
                         disabled={
                           shortSelectionLocked ||
+                          market.pairs.some((pair) => selectedInventoryPair(pair, selectedInventoryPairs)) ||
                           (market.pair_count === 0 &&
                             !selectedShortMarketKeys.includes(
                               market.monitor_key,
@@ -257,8 +331,8 @@ export function DashboardPage() {
                         onClick={() => toggleShortMarket(market.monitor_key)}
                       >
                         {selectedShortMarketKeys.includes(market.monitor_key)
-                          ? "Short enabled"
-                          : "Enable short"}
+                          ? "Split mode enabled"
+                          : "Prepare collateral"}
                       </Button>
                       <Button
                         aria-label="Disconnect policy event"
@@ -276,6 +350,50 @@ export function DashboardPage() {
                       </Button>
                     </div>
                   </div>
+                  {market.pairs.length > 0 && (
+                    <details className="mt-3 border-t border-border/60 pt-3" open={market.pairs.some((pair) => selectedInventoryPair(pair, selectedInventoryPairs)) || undefined}>
+                      <summary className="cursor-pointer text-xs font-medium">
+                        Sell existing inventory
+                      </summary>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Choose the exact tokens to sell together. Uses available
+                        accounted tokens only, with no splits or automatic top-ups.
+                        Balances are verified when trading starts.
+                      </p>
+                      <fieldset
+                        aria-label={`Existing inventory pairs for ${market.markets[0]?.title ?? "Policy event"}`}
+                        disabled={shortSelectionLocked || selectedShortMarketKeys.includes(market.monitor_key)}
+                        className="mt-2 grid gap-2 disabled:opacity-60"
+                      >
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="justify-self-start"
+                          onClick={() => toggleAllInventoryPairs(market.pairs)}
+                        >
+                          {market.pairs.every((pair) => selectedInventoryPair(pair, selectedInventoryPairs))
+                            ? "Clear all" : "Select all"}
+                        </Button>
+                        {market.pairs.map((pair) => (
+                          <label key={JSON.stringify(inventoryPairKey(pair))} className="flex items-start gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 size-4 shrink-0 accent-primary"
+                              checked={selectedInventoryPair(pair, selectedInventoryPairs)}
+                              onChange={() => toggleInventoryPair(pair)}
+                            />
+                            {sellPairLabel(pair)}
+                          </label>
+                        ))}
+                      </fieldset>
+                      {selectedShortMarketKeys.includes(market.monitor_key) && (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Disable split mode to select existing inventory for this event.
+                        </p>
+                      )}
+                    </details>
+                  )}
                 </div>
               ))
             )}

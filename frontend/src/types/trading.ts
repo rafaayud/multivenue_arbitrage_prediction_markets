@@ -6,6 +6,9 @@ export type TradingRunStatus =
   | "completed"
   | "failed"
 
+/** Exact complementary contracts authorized for SELL using existing tokens only. */
+export type InventorySellPair = [string, string]
+
 export interface TradingRun {
   id: string
   status: TradingRunStatus
@@ -13,6 +16,7 @@ export interface TradingRun {
   finished_at: string | null
   error: string | null
   short_market_keys: string[]
+  existing_inventory_pairs?: InventorySellPair[]
 }
 
 export interface TradingSession {
@@ -32,4 +36,5 @@ export interface TradingRunSettings {
   cost_buffer: number
   max_recovery_loss: number
   short_market_keys: string[]
+  existing_inventory_pairs?: InventorySellPair[]
 }

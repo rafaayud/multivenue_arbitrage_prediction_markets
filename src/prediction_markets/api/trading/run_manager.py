@@ -82,7 +82,7 @@ class ExecutionRunManager:
             stop_event = asyncio.Event()
             current = ExecutionRun(
                 id=uuid4().hex,
-                status="preparing" if config.short_market_keys else "running",
+                status="preparing" if config.short_market_keys or config.existing_inventory_pairs else "running",
                 config=config,
                 started_at=datetime.now(timezone.utc),
             )
@@ -111,7 +111,7 @@ class ExecutionRunManager:
         return self._run
 
     def mark_running(self) -> None:
-        """Mark a collateral-preparing run ready for live execution."""
+        """Mark an inventory-checking or collateral-preparing run ready."""
         if self._run is not None and self._run.status == "preparing":
             self._run = replace(self._run, status="running")
 

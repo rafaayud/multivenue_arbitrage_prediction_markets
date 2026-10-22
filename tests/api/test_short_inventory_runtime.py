@@ -1032,7 +1032,8 @@ def test_health_monitor_confirms_transient_timeout_before_stopping() -> None:
     assert health.calls == 3
 
 
-def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
+@pytest.mark.parametrize("existing_only", (False, True))
+def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch, existing_only) -> None:
     """Do not configure the engine until selected inventory is confirmed."""
     order = []
     pair_key = ("left", "right")
@@ -1066,8 +1067,11 @@ def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
             order.append("running")
 
     class _PreparedInventory:
-        async def prepare(self, _market_keys, *, minimum_time_remaining_seconds):
+        prepared_market_keys = ("regular:selected",)
+
+        async def prepare(self, _market_keys, *, minimum_time_remaining_seconds, existing_inventory_pairs):
             assert minimum_time_remaining_seconds == 120
+            assert existing_inventory_pairs == ((pair_key,) if existing_only else ())
             order.append("inventory")
             return frozenset({pair_key}), inventory_by_contract
 
@@ -1099,7 +1103,10 @@ def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
 
     asyncio.run(
         runtime._run_execution(
-            LiveArbitrageConfig(short_market_keys=("regular:selected",)),
+            LiveArbitrageConfig(
+                short_market_keys=() if existing_only else ("regular:selected",),
+                existing_inventory_pairs=(pair_key,) if existing_only else (),
+            ),
             asyncio.Event(),
         ),
     )
@@ -1108,3 +1115,4 @@ def test_runtime_prepares_inventory_before_enabling_engine(monkeypatch) -> None:
     assert runtime.engine.config.short_pair_keys == frozenset({pair_key})
     assert runtime.engine.config.short_inventory_by_contract == inventory_by_contract
     assert runtime.engine.config.execute_short is True
+    assert runtime.engine.config.short_market_keys == frozenset({"regular:selected"})

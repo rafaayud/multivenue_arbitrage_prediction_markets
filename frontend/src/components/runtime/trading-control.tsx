@@ -15,9 +15,10 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { TradingRunController } from "@/features/trading/use-trading-run"
+import { readTradingPreferences, saveTradingPreferences } from "@/features/trading/trading-preferences"
 import { apiClient } from "@/lib/api-client"
 import type { SignalSettings } from "@/types/runtime"
-import type { TradingRunSettings } from "@/types/trading"
+import type { InventorySellPair, TradingRunSettings } from "@/types/trading"
 
 const DEFAULT_SETTINGS: TradingRunSettings = {
   max_arbitrages: 1,
@@ -43,11 +44,16 @@ export function TradingControl({
   controller,
   signalSettings = DEFAULT_SIGNAL_SETTINGS,
   shortMarketKeys = [],
+  existingInventoryPairs = [],
+  manualInventoryMarketKeys = shortMarketKeys,
 }: {
   controller: TradingRunController
   signalSettings?: SignalSettings
   shortMarketKeys?: string[]
+  existingInventoryPairs?: InventorySellPair[]
+  manualInventoryMarketKeys?: string[]
 }) {
+  const [savedSettings, setSavedSettings] = useState(readTradingPreferences)
   const [tradingKey, setTradingKey] = useState("")
   const [riskAcknowledged, setRiskAcknowledged] = useState(false)
   const [manualSplitsDeclared, setManualSplitsDeclared] = useState(false)
@@ -55,24 +61,24 @@ export function TradingControl({
   const [importResult, setImportResult] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [maxArbitrages, setMaxArbitrages] = useState(
-    String(DEFAULT_SETTINGS.max_arbitrages),
+    String(savedSettings.max_arbitrages ?? DEFAULT_SETTINGS.max_arbitrages),
   )
   const [maxConcurrentArbitrages, setMaxConcurrentArbitrages] = useState(
-    String(DEFAULT_SETTINGS.max_concurrent_arbitrages),
+    String(savedSettings.max_concurrent_arbitrages ?? DEFAULT_SETTINGS.max_concurrent_arbitrages),
   )
   const [polymarketMax, setPolymarketMax] = useState(
-    String(DEFAULT_SETTINGS.polymarket_max_notional),
+    String(savedSettings.polymarket_max_notional ?? DEFAULT_SETTINGS.polymarket_max_notional),
   )
   const [limitlessMax, setLimitlessMax] = useState(
-    String(DEFAULT_SETTINGS.limitless_max_notional),
+    String(savedSettings.limitless_max_notional ?? DEFAULT_SETTINGS.limitless_max_notional),
   )
   const [predictMax, setPredictMax] = useState(
-    String(DEFAULT_SETTINGS.predict_max_notional),
+    String(savedSettings.predict_max_notional ?? DEFAULT_SETTINGS.predict_max_notional),
   )
   const [minNetEdge, setMinNetEdge] = useState<string | null>(null)
   const [costBuffer, setCostBuffer] = useState<string | null>(null)
   const [maxRecoveryLoss, setMaxRecoveryLoss] = useState(
-    String(DEFAULT_SETTINGS.max_recovery_loss),
+    String(savedSettings.max_recovery_loss ?? DEFAULT_SETTINGS.max_recovery_loss),
   )
   const busy = controller.requestState === "loading" || importingSplits
   const enabled =
@@ -94,6 +100,9 @@ export function TradingControl({
     cost_buffer: Number(costBufferValue),
     max_recovery_loss: Number(maxRecoveryLoss),
     short_market_keys: shortMarketKeys,
+    ...(existingInventoryPairs.length > 0
+      ? { existing_inventory_pairs: existingInventoryPairs }
+      : {}),
   }
   const settingsValid =
     Number.isInteger(settings.max_arbitrages) &&
@@ -120,6 +129,8 @@ export function TradingControl({
   const enable = (allowDegradedVenues: boolean) => {
     const key = tradingKey.trim()
     if (busy || !key || !settingsValid || !riskAcknowledged) return
+    saveTradingPreferences(settings)
+    setSavedSettings(settings)
     setTradingKey("")
     setRiskAcknowledged(false)
     void controller.enable(
@@ -136,7 +147,7 @@ export function TradingControl({
     setImportResult(null)
     setImportError(null)
     try {
-      const imported = await apiClient.importManualSplits(tradingKey.trim(), shortMarketKeys)
+      const imported = await apiClient.importManualSplits(tradingKey.trim(), manualInventoryMarketKeys)
       setImportResult(imported.length
         ? `Registered ${imported.map((item) => `${item.quantity} YES + ${item.quantity} NO on ${item.venue_id}`).join("; ")}. Saved for future runs.`
         : "No new complete sets to register. Existing inventory is already accounted for.")
@@ -157,7 +168,8 @@ export function TradingControl({
             }`}
           />
           {controller.run?.status === "preparing"
-            ? "Preparing short collateral"
+            ? (controller.run?.existing_inventory_pairs?.length
+              ? "Checking sell inventory" : "Preparing short collateral")
             : `Trading ${enabled ? "enabled" : "disabled"}`}
         </Badge>
 
@@ -194,8 +206,8 @@ export function TradingControl({
               setImportResult(null)
               setImportError(null)
               if (open) {
-                setMinNetEdge(null)
-                setCostBuffer(null)
+                setMinNetEdge(savedSettings.min_net_edge == null ? null : String(savedSettings.min_net_edge))
+                setCostBuffer(savedSettings.cost_buffer == null ? null : String(savedSettings.cost_buffer))
               }
             }}
           >
@@ -371,8 +383,8 @@ export function TradingControl({
                 Minimum accepted budget: 1 unit of each venue's quote currency
                 (USDC or USDT). The actual spend can be lower than the selected
                 maximum. Every connected event can execute long
-                arbitrage; only events marked on the dashboard can prepare and
-                execute covered shorts.
+                arbitrage. SELL orders use the inventory routes selected on the
+                dashboard; collateral preparation requires its separate event toggle.
               </p>
               {shortMarketKeys.length > 0 && (
                 <p className="mt-3 rounded-md border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-200">
@@ -380,6 +392,15 @@ export function TradingControl({
                   {shortMarketKeys.length === 1 ? " is" : "s are"} selected.
                   Enabling trading can split and lock real venue collateral
                   before SELL orders are allowed.
+                </p>
+              )}
+              {existingInventoryPairs.length > 0 && (
+                <p className="mt-3 rounded-md border border-border bg-muted/30 p-3 text-xs">
+                  Sell existing inventory: {existingInventoryPairs.length} selected pair
+                  {existingInventoryPairs.length === 1 ? "" : "s"}.
+                  Wallet balances and accounted tokens are checked before trading.
+                  These pairs never split collateral or replenish tokens automatically;
+                  sales stop when either selected token runs out.
                 </p>
               )}
               <label className="mt-4 block text-xs font-medium">
@@ -392,11 +413,12 @@ export function TradingControl({
                   className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </label>
-              {shortMarketKeys.length > 0 && (
+              {manualInventoryMarketKeys.length > 0 && (
                 <section className="mt-4 space-y-3 rounded-xl border border-border bg-muted/30 p-4">
                   <h3 className="text-sm font-semibold">Already split manually?</h3>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Register unaccounted YES/NO pairs in the selected SHORT events.
+                    Register unaccounted YES/NO pairs in events selected for
+                    collateral preparation or existing-inventory sales.
                     Their cost is 1 collateral unit per pair, allocated equally to
                     YES and NO. This is saved across restarts; repeating it will
                     not count the same tokens twice.

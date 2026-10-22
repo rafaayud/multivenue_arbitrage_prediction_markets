@@ -81,6 +81,17 @@ class TradingRunStart(BaseModel):
         ...,
     ] = Field(default=(), max_length=100)
 
+    existing_inventory_pairs: tuple[
+        tuple[
+            Annotated[str, Field(min_length=1, max_length=512)],
+            Annotated[str, Field(min_length=1, max_length=512)],
+        ],
+        ...,
+    ] = Field(
+        default=(), max_length=100,
+        description="Exact monitored SELL pairs using existing tokens only; never split collateral.",
+    )
+
 
 class SignalSettings(BaseModel):
     """Validate fee-aware thresholds applied during opportunity detection.
@@ -245,6 +256,7 @@ class TradingRunOut(BaseModel):
     finished_at: datetime | None
     error: str | None
     short_market_keys: tuple[str, ...]
+    existing_inventory_pairs: tuple[tuple[str, str], ...] = ()
 
 
 class OrderOut(BaseModel):
