@@ -22,6 +22,7 @@ maintainers = [
 ]
 
 dependencies = [
+    "certifi>=2026.10.19",
     "cryptography>=48.0.0",
     "fastapi>=0.139.2",
     "httpx>=0.28.0",
