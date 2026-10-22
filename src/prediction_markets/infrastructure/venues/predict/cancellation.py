@@ -31,7 +31,8 @@ from prediction_markets.infrastructure.venues.predict.config import (
 )
 
 _WEI = Decimal(10**18)
-_LOG_BLOCKS = 1000
+# Alchemy's free tier accepts at most ten blocks per eth_getLogs request.
+_LOG_BLOCKS = 10
 _MAX_SCAN_BLOCKS = 32000
 
 

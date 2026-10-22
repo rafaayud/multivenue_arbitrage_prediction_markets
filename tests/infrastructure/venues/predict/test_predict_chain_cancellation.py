@@ -127,6 +127,28 @@ def test_finalized_scan_proves_zero_partial_and_full_fills(quantity, side):
     exchange.functions.getOrderStatus.return_value.call.assert_called_with(block_identifier=110)
 
 
+def test_finalized_scan_respects_rpc_range_and_includes_last_block_fill():
+    """Cover the complete inclusive range within a ten-block RPC limit."""
+    helper, _, prepared, initial, exchange, eth = _chain()
+    exchange.functions.getOrderStatus.return_value.call.return_value = (True, 0)
+    eth.get_block.return_value = {"number": 120}
+    fill = {**_fill(2), "blockNumber": 120}
+    ranges = []
+
+    def logs(*, from_block, to_block, argument_filters):
+        assert to_block - from_block + 1 <= 10
+        assert argument_filters == {"orderHash": _HASH}
+        ranges.append((from_block, to_block))
+        return [fill] if from_block <= 120 <= to_block else []
+
+    exchange.events.OrderFilled.return_value.get_logs.side_effect = logs
+    result = helper.reconcile(prepared.reference, initial)
+    assert ranges == [(100, 109), (110, 119), (120, 120)]
+    assert result.filled_quantity.value == 2
+    assert result.may_receive_more_fills is False
+    assert result.settlement_finalized_block == 120
+
+
 def test_unfinalized_removed_order_never_authorizes_replacement():
     """API cancellation and a latest block are not finalized evidence."""
     helper, _, prepared, initial, exchange, _ = _chain()
@@ -737,9 +759,10 @@ def test_rollout_flag_selects_definitive_cancellation(monkeypatch):
     helper = Mock()
     monkeypatch.setattr(cancellation, "PredictOnChainCancellation", Mock(return_value=helper))
     monkeypatch.setenv("PREDICT_ONCHAIN_CANCEL_ENABLED", "1")
+    monkeypatch.setenv("PREDICT_RESTING_WINDOW_MS", "5000")
     adapter, _, client, intent, _ = _collateral_adapter()
     assert adapter.supports_definitive_cancellation
-    assert adapter.cancellation_window_seconds(intent) == 1
+    assert adapter.cancellation_window_seconds(intent) == 5
     client.close()
 
 
