@@ -80,6 +80,28 @@ _TIME_IN_FORCE = {
     TimeInForce.IOC: PolymarketOrderType.FAK,
 }
 _FEE_QUANTUM = Decimal("0.00001")
+_IOC_RESTING_WINDOW_SECONDS = 5.0
+
+
+def _uses_timed_limit(intent: OrderIntent) -> bool:
+    """Preserve exact shares when immediate-order amounts cannot be represented.
+
+    Notes
+    -----
+    - FAK/FOK require two maker decimals and four taker decimals. A BUY
+      for 10.16 shares at 0.92 needs 9.3472 collateral and cannot use FAK.
+    - IOC uses a cancellable GTC instead of rounding away residual shares.
+      FOK retains its all-or-nothing semantics and is validated separately.
+    - MARKET has no preloaded limit with which to determine amount precision,
+      so its marketable limit always uses the bounded cancellation path.
+    """
+    if intent.order_type is OrderType.MARKET:
+        return True
+    if intent.time_in_force is not TimeInForce.IOC or intent.limit_price is None:
+        return False
+    notional = intent.quantity.value * intent.limit_price.value
+    quantum = Decimal("0.01") if intent.side is OrderSide.BUY else Decimal("0.0001")
+    return notional != notional.quantize(quantum)
 
 
 def _validate_polymarket_price(price: Decimal, tick_size: Decimal) -> None:
@@ -276,6 +298,16 @@ class PolymarketExecutionAdapter(ExecutionPort):
         self._version_preloaded = False
         self._order_version: int | None = None
 
+    def cancellation_window_seconds(self, intent: OrderIntent) -> float | None:
+        """Cancel precision-constrained IOC limits after five seconds.
+
+        Notes
+        -----
+        - The shared dispatcher also cancels these orders during shutdown and
+          restart recovery; an uncertain cancellation never permits replacement.
+        """
+        return _IOC_RESTING_WINDOW_SECONDS if _uses_timed_limit(intent) else None
+
     def preload(
         self,
         contract_ids: tuple[ContractID, ...],
@@ -354,7 +386,7 @@ class PolymarketExecutionAdapter(ExecutionPort):
         Parameters
         ----------
         intent
-            LIMIT or MARKET intent. MARKET is encoded as a marketable FAK order.
+            LIMIT or MARKET intent. MARKET uses a cancellable marketable limit.
 
         Returns
         -------
@@ -366,7 +398,8 @@ class PolymarketExecutionAdapter(ExecutionPort):
         RuntimeError
             If signing metadata was not successfully preloaded.
         ValueError
-            If the requested price is outside the preloaded tick constraints.
+            If the price violates its tick or immediate-order amounts exceed
+            the venue's precision limits.
 
         Notes
         -----
@@ -374,6 +407,8 @@ class PolymarketExecutionAdapter(ExecutionPort):
           repairs a cache miss with venue I/O.
         - MARKET intents still read the current venue order book and are outside
           the monitored LIMIT-order hot path.
+        - IOC amounts that need sub-cent BUY collateral or more than four SELL
+          collateral decimals use GTC with dispatcher-owned cancellation.
         """
         if intent.order_type not in {OrderType.LIMIT, OrderType.MARKET}:
             raise NotImplementedError("Polymarket supports LIMIT and MARKET intents")
@@ -396,9 +431,9 @@ class PolymarketExecutionAdapter(ExecutionPort):
             else intent.limit_price.value
         )
         _validate_polymarket_price(price, tick_size)
+        timed_limit = _uses_timed_limit(intent)
         order_type = (
-            PolymarketOrderType.FAK
-            if intent.order_type is OrderType.MARKET
+            PolymarketOrderType.GTC if timed_limit
             else _TIME_IN_FORCE[intent.time_in_force]
         )
         neg_risk = self._neg_risk_by_token[token_id]
@@ -417,6 +452,14 @@ class PolymarketExecutionAdapter(ExecutionPort):
             tick_size=tick_size,
             neg_risk=neg_risk,
         )
+        if order_type in {PolymarketOrderType.FAK, PolymarketOrderType.FOK} and (
+            int(signed_order.makerAmount) % 10_000
+            or int(signed_order.takerAmount) % 100
+        ):
+            raise ValueError(
+                "Polymarket immediate order exceeds maker/taker precision; "
+                "use an IOC limit with exact shares instead of FOK"
+            )
         order_id = _expected_order_id(self._client, signed_order, neg_risk)
         client_order_id = intent.client_order_id or ClientOrderID(uuid4().hex)
         request = {
@@ -424,7 +467,10 @@ class PolymarketExecutionAdapter(ExecutionPort):
             "version": 2 if hasattr(signed_order, "timestamp") else 1,
             "order": asdict(signed_order),
             "order_type": str(order_type),
-            "post_only": self._post_only if order_type == PolymarketOrderType.GTC else False,
+            "post_only": (
+                self._post_only
+                if order_type == PolymarketOrderType.GTC and not timed_limit else False
+            ),
             "intent": _intent_data(intent),
         }
         return PreparedOrder(

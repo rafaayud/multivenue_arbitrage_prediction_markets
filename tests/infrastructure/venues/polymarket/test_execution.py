@@ -1,10 +1,16 @@
 """Verify recoverable Polymarket execution behavior."""
 
+import asyncio
+import json
 from decimal import Decimal
 
 import httpx
+import pytest
+from py_clob_client_v2.clob_types import CreateOrderOptions
 from py_clob_client_v2.exceptions import PolyApiException
+from py_clob_client_v2.order_builder.builder import OrderBuilder
 from py_clob_client_v2.order_utils.model.order_data_v2 import SignedOrderV2
+from py_clob_client_v2.signer import Signer
 
 from prediction_markets.domain.contracts.value_objects import TickSize
 from prediction_markets.domain.shared.value_objects import (
@@ -145,6 +151,131 @@ def _preloaded_adapter(client: _Client, **kwargs) -> PolymarketExecutionAdapter:
     return adapter
 
 
+class _SigningClient(_Client):
+    """Build real SDK signatures with a synthetic key and no venue I/O."""
+
+    def create_order(self, args, options=None):
+        """Sign the actual SDK-generated amounts without posting them."""
+        self.created.append(args)
+        self.create_options.append(options)
+        builder = OrderBuilder(Signer("0x" + "01" * 32, 137))
+        order = builder.build_order(
+            args,
+            CreateOrderOptions(tick_size=options.tick_size, neg_risk=options.neg_risk),
+            version=2,
+        )
+        order.order_id = "venue-1"
+        return order
+
+    def post_order(self, order, order_type, post_only=False):
+        """Expose a resting venue snapshot matching the signed order."""
+        response = super().post_order(order, order_type, post_only)
+        shares = Decimal(order.takerAmount if order.side == 0 else order.makerAmount)
+        cash = Decimal(order.makerAmount if order.side == 0 else order.takerAmount)
+        self.order.update(
+            asset_id=order.tokenId, original_size=str(shares / 1_000_000),
+            price=str(cash / shares),
+        )
+        return response
+
+
+@pytest.mark.parametrize(
+    "side,price,tick,wire_type",
+    [
+        (OrderSide.BUY, "0.92", "0.01", "GTC"),
+        (OrderSide.BUY, "0.50", "0.01", "FAK"),
+        (OrderSide.BUY, "0.999", "0.001", "GTC"),
+        (OrderSide.BUY, "0.9975", "0.0025", "GTC"),
+        (OrderSide.SELL, "0.92", "0.01", "FAK"),
+        (OrderSide.SELL, "0.999", "0.001", "GTC"),
+        (OrderSide.SELL, "0.9975", "0.0025", "FAK"),
+    ],
+)
+def test_real_sdk_preserves_exact_ioc_shares_and_valid_wire_precision(side, price, tick, wire_type):
+    """Reproduce fractional residuals with the real SDK amount builder."""
+    client = _SigningClient()
+    client.market_info["mts"] = tick
+    adapter = PolymarketExecutionAdapter(client=client, post_only=True)
+    intent = _intent(
+        contract_id=ContractID("polymarket:condition-1:1"),
+        side=side, quantity=Quantity(Decimal("10.16")),
+        limit_price=Price(Decimal(price)), time_in_force=TimeInForce.IOC,
+    )
+    adapter.preload((intent.contract_id,))
+    prepared = adapter.prepare(intent)
+    request = json.loads(prepared.request)
+    order = request["order"]
+    shares = int(order["takerAmount"] if side is OrderSide.BUY else order["makerAmount"])
+    cash = int(order["makerAmount"] if side is OrderSide.BUY else order["takerAmount"])
+    assert shares == 10_160_000
+    assert Decimal(cash) / 1_000_000 == Decimal("10.16") * Decimal(price)
+    assert request["order_type"] == wire_type
+    assert request["post_only"] is False
+    assert adapter.cancellation_window_seconds(intent) == (5 if wire_type == "GTC" else None)
+    if wire_type == "FAK":
+        assert int(order["makerAmount"]) % 10_000 == 0
+        assert int(order["takerAmount"]) % 100 == 0
+    assert client.posted == []
+
+
+def test_fok_cannot_silently_change_precision_or_become_a_resting_order():
+    """Reject an impossible exact FOK amount before any submission."""
+    client = _SigningClient()
+    adapter = PolymarketExecutionAdapter(client=client)
+    intent = _intent(
+        contract_id=ContractID("polymarket:condition-1:1"),
+        quantity=Quantity(Decimal("10.16")), limit_price=Price(Decimal("0.92")),
+        time_in_force=TimeInForce.FOK,
+    )
+    adapter.preload((intent.contract_id,))
+    with pytest.raises(ValueError, match="maker/taker precision"):
+        adapter.prepare(intent)
+    assert adapter.cancellation_window_seconds(intent) is None
+    assert client.posted == []
+
+
+def test_fractional_polymarket_ioc_is_cancelled_by_the_dispatcher(tmp_path, monkeypatch):
+    """Never leave the precision-preserving GTC resting without cancellation."""
+    from prediction_markets.application.events import OrderSnapshotUpdated, SubmissionReceived, SubmitOrder
+    from prediction_markets.application.pipeline import EventSink, OutputDispatcher, RingBuffer
+    from prediction_markets.application.state import TradingState
+    from prediction_markets.domain.shared.value_objects import VenueID
+    from prediction_markets.infrastructure.binary_journal import BinaryJournal
+
+    monkeypatch.setattr(
+        "prediction_markets.infrastructure.venues.polymarket.execution._IOC_RESTING_WINDOW_SECONDS", 0.01,
+    )
+
+    async def run():
+        client = _SigningClient()
+        adapter = PolymarketExecutionAdapter(client=client)
+        intent = _intent(
+            contract_id=ContractID("polymarket:condition-1:1"),
+            quantity=Quantity(Decimal("10.16")), limit_price=Price(Decimal("0.92")),
+            time_in_force=TimeInForce.IOC,
+        )
+        adapter.preload((intent.contract_id,))
+        journal = BinaryJournal(tmp_path / "fractional-recovery.log")
+        inputs = RingBuffer(16)
+        dispatcher = OutputDispatcher(RingBuffer(1), EventSink(inputs), journal, TradingState())
+        dispatcher.configure({VenueID("POLYMARKET"): adapter})
+        try:
+            await dispatcher.execute(SubmitOrder("fractional", "recovery", VenueID("POLYMARKET"), intent))
+            assert isinstance(await inputs.get(), SubmissionReceived)
+            while True:
+                event = await asyncio.wait_for(inputs.get(), 2)
+                if isinstance(event, OrderSnapshotUpdated) and event.snapshot.is_terminal():
+                    assert event.snapshot.status is OrderStatus.CANCELLED
+                    break
+            assert client.posted[0][1:] == ("GTC", False)
+            assert client.cancelled == ["venue-1"]
+        finally:
+            await dispatcher.close()
+            journal.close()
+
+    asyncio.run(run())
+
+
 def test_prepares_exact_signed_request_and_reconciles_after_restart():
     client = _Client()
     prepared = _preloaded_adapter(client, post_only=True).prepare(_intent())
@@ -278,7 +409,7 @@ def test_cancels_using_only_the_persisted_reference():
     assert result.snapshot.status is OrderStatus.CANCELLED
 
 
-def test_market_intent_is_prepared_as_marketable_fak():
+def test_market_intent_uses_a_bounded_marketable_limit():
     client = _Client()
     client.get_order_book = lambda token_id: {
         "bids": [{"price": "0.28"}],
@@ -295,7 +426,10 @@ def test_market_intent_is_prepared_as_marketable_fak():
     PolymarketExecutionAdapter(client=client).submit(prepared)
 
     assert client.created[0].price == 0.35
-    assert client.posted[0][1:] == ("FAK", False)
+    assert client.posted[0][1:] == ("GTC", False)
+    assert _preloaded_adapter(client).cancellation_window_seconds(
+        _intent(order_type=OrderType.MARKET, limit_price=None),
+    ) == 5
 
 
 def test_transport_timeout_keeps_submission_uncertain():

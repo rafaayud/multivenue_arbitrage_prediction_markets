@@ -180,6 +180,23 @@ def test_local_requotes_have_a_separate_finite_budget(recovery_case):
     assert "local recovery requote budget exhausted" in recovery.last_error
 
 
+def test_polymarket_invalid_amounts_are_not_blindly_requoted(recovery_case):
+    """A deterministic wire-format rejection cannot improve with a new quote."""
+    state, lifecycle = recovery_case
+    command = replace(_plan(state, lifecycle), venue_id=VenueID("POLYMARKET"))
+    rejected = _rejected(command)
+    rejected = replace(rejected, result=replace(
+        rejected.result,
+        reason="HTTP 400: invalid amounts, the market buy orders maker amount supports a max accuracy of 2 decimals",
+    ))
+    _respond(state, lifecycle, rejected)
+    assert _plan(state, lifecycle) is None
+    recovery = state.recoveries[command.execution_id]
+    assert recovery.attempts == 1
+    assert recovery.status is RecoveryStatus.NEEDS_REVIEW
+    assert "invalid amounts" in recovery.last_error
+
+
 def test_recovery_lifecycle_passes_freshness_into_route_selection(recovery_case):
     """Choose an executable unwind before a better-priced stale missing leg."""
     state, lifecycle = recovery_case

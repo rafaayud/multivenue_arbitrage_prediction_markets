@@ -6,6 +6,7 @@ Responsibilities
 - Reuse common order accounting and record estimated versus realized economics.
 - Requote terminal zero-fill orders through a bounded sequence of fresh attempts.
 - Keep definite pre-submission rejections outside the venue-attempt budget.
+- Stop requoting deterministic Polymarket amount-validation rejections.
 """
 
 from collections.abc import Mapping
@@ -398,6 +399,8 @@ class RecoveryLifecycle:
         -----
         - A new fill on a previous attempt is still an accounting fact. It also
           stops new trading and requires review of all overlapping attempts.
+        - Polymarket amount-validation rejections require review immediately;
+          repeating the same wire format with a fresh quote cannot repair it.
         """
         command = (
             event.command
@@ -490,6 +493,10 @@ class RecoveryLifecycle:
                 if (
                     event.result.status is SubmissionStatus.REJECTED
                     and _can_requote(recovery)
+                    and not (
+                        str(command.venue_id) == "POLYMARKET"
+                        and "invalid amounts" in reason.lower()
+                    )
                 ):
                     now = Timestamp.now()
                     outputs.extend(
