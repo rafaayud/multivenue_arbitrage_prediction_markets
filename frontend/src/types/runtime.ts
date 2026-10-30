@@ -26,6 +26,7 @@ export interface RuntimeState {
   trading_enabled?: boolean
   signal_settings?: SignalSettings
   regular_markets?: RegularMonitoredMarket[]
+  monitor_only_venues?: string[]
   short_inventory_preparing?: boolean
   prepared_short_market_keys?: string[]
   last_execution_latency?: ExecutionLatencyTrace | null

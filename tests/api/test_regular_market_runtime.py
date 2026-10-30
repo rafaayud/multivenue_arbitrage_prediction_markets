@@ -292,6 +292,47 @@ def test_monitor_regular_adds_contracts_to_dynamic_subscriptions() -> None:
     assert streams[right.venue_id].contracts == ()
 
 
+def test_monitor_read_only_venue_without_fee_calculator() -> None:
+    """Subscribe Hyperliquid books alongside funded venues without inventing fees."""
+    markets = tuple(_market(VenueID(venue), MarketID(venue), OutcomeID("yes"))
+                    for venue in ("POLYMARKET", "HYPERLIQUID"))
+    left, right = map(_contract, markets)
+    pair = MatchedContractPair(left, right, Timestamp.from_iso("2099-01-01T00:00:00Z"))
+    candidate = RegularCandidate(markets)
+    streams = {market.venue_id: _Stream() for market in markets}
+    coordinator = _MarketFeedCoordinator(
+        _Matcher((candidate, (pair,))), streams, {left.venue_id: _Fees()},
+        _Pipeline(), TradingState(), refresh_seconds=15,
+    )
+    runtime = ArbitrageRuntime(enabled=False)
+    runtime._feed = coordinator
+    resolved, count = asyncio.run(runtime.monitor_regular(tuple(
+        RegularMarketSelection(market.venue_id, str(market.id)) for market in markets
+    )))
+    assert resolved == candidate and count == 1
+    assert coordinator._desired[right.venue_id] == (right.id,)
+    assert "HYPERLIQUID" in runtime.status()["monitor_only_venues"]
+
+
+def test_mixed_inventory_preparation_excludes_read_only_pairs() -> None:
+    """Prepare only executable pairs and reject explicit Hyperliquid sales."""
+    from prediction_markets.api.runtime.inventory import _short_inventory_selection, _existing_inventory_selections
+
+    markets = tuple(_market(VenueID(venue), MarketID(venue), OutcomeID("yes"))
+                    for venue in ("POLYMARKET", "PREDICT", "HYPERLIQUID"))
+    poly, predict, hyperliquid = map(_contract, markets)
+    expiry = Timestamp.from_iso("2099-01-01T00:00:00Z")
+    executable = MatchedContractPair(poly, predict, expiry)
+    read_only = MatchedContractPair(poly, hyperliquid, expiry)
+    _, venues, pairs = _short_inventory_selection("selected", (executable, read_only))
+    assert pairs == (executable,) and hyperliquid.venue_id not in venues
+    with pytest.raises(RuntimeError, match="read-only"):
+        _short_inventory_selection("selected", (read_only,))
+    state = TradingState(matches={RegularCandidate(markets): (executable, read_only)})
+    with pytest.raises(RuntimeError, match="read-only"):
+        _existing_inventory_selections(state, (executable.key, read_only.key), ())
+
+
 def test_unmonitor_succeeds_while_remaining_stale_subscription_fails() -> None:
     """Persist removal even when another stale market cannot refresh."""
     left_venue = VenueID("POLYMARKET")

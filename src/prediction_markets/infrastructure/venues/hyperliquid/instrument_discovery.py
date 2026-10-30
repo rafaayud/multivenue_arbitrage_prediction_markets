@@ -30,6 +30,8 @@ class HyperliquidInstrumentDiscoveryAdapter(InstrumentDiscoveryPort):
         if query.min_volume is not None or query.min_liquidity is not None:
             raise ValueError("Hyperliquid outcome metadata does not supply volume or liquidity")
         identifier = query.venue_market_id or query.market_slug
+        if identifier and identifier.startswith("outcome:"):
+            identifier = identifier.removeprefix("outcome:")
         if identifier and identifier.startswith("hyperliquid:"):
             identifier = str(parse_hyperliquid_contract_id(ContractID(identifier))[0])
         selected = []

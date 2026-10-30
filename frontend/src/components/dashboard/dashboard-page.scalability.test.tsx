@@ -56,6 +56,7 @@ vi.mock("@/features/runtime/use-runtime", () => ({
     runtime: {
       running: true,
       regular_markets: state.regularMarkets,
+      monitor_only_venues: ["HYPERLIQUID"],
     },
     requestState: "success",
     error: null,
@@ -123,6 +124,22 @@ describe("DashboardPage", () => {
     expect(state.unmonitor).toHaveBeenCalledWith("regular:fed-rate-decision")
   })
 
+  test("labels Hyperliquid books and prevents read-only inventory selection", () => {
+    const contract = (venue: string, outcome: string) => ({
+      id: `${venue}-${outcome}`, venue_id: venue, market_id: `${venue}-fed`,
+      outcome_id: `fed:${outcome}:token`, symbol: null,
+    })
+    state.regularMarkets = [{
+      monitor_key: "regular:fed", pair_count: 1,
+      markets: [{ venue_id: "POLYMARKET", title: "Fed" }, { venue_id: "HYPERLIQUID", title: "Fed" }],
+      pairs: [{ left: contract("POLYMARKET", "yes"), right: contract("HYPERLIQUID", "no") }],
+    }]
+    render(<DashboardPage />)
+    expect(screen.getByText("HYPERLIQUID · Books only")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Enable short arbitrage for Fed" })).toBeDisabled()
+    expect(screen.queryByText("Sell existing inventory")).not.toBeInTheDocument()
+  })
+
   test("passes a selected Fed market to covered-short trading", async () => {
     const user = userEvent.setup()
     state.regularMarkets = [
@@ -157,7 +174,7 @@ describe("DashboardPage", () => {
     })
     state.regularMarkets = [{
       monitor_key: "regular:fed", pair_count: 2,
-      markets: [{ venue_id: "PREDICT", title: "Fed no change" }],
+      markets: [{ venue_id: "PREDICT", title: "Fed no change" }, { venue_id: "POLYMARKET", title: "Fed no change" }],
       pairs: [
         { left: contract("PREDICT", "yes"), right: contract("POLYMARKET", "no") },
         { left: contract("PREDICT", "no"), right: contract("POLYMARKET", "yes") },

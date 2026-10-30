@@ -361,6 +361,37 @@ def test_detection_uses_skew_not_book_age() -> None:
     assert opportunity is not None
 
 
+def test_monitor_only_venue_stores_books_without_signals_or_orders() -> None:
+    """Keep public monitoring inert even with budgets, fees and trading enabled."""
+    left = _contract("left", VenueID("POLYMARKET"), "yes")
+    right = _contract("right", VenueID("HYPERLIQUID"), "no")
+    cycle = MarketCycle(Underlying("BTC"), 300)
+    pair = MatchedContractPair(left, right, Timestamp.now())
+    state = TradingState()
+    observed = []
+    engine = TradingEngine(
+        EventDispatcher(state), {venue: _ZeroFees() for venue in (left.venue_id, right.venue_id)},
+        monitor_only_venues=frozenset({right.venue_id}),
+        observe_orderbooks=lambda *books: observed.append(books),
+    )
+    engine.configure(EngineConfig(
+        max_notional_by_venue={left.venue_id: Decimal("100"), right.venue_id: Decimal("100")},
+        min_market_time_remaining_seconds=None,
+    ))
+    state.trading_enabled = True
+    _process(engine, MarketMatchesUpdated(cycle, (pair,)))
+    left_book, right_book = _book(left, "0.4", "20"), _book(right, "0.5", "20")
+    _process(engine, OrderBookUpdated(left.venue_id, left.id, left_book))
+    outputs = _process(engine, OrderBookUpdated(right.venue_id, right.id, right_book))
+    assert state.books[right.id] == right_book and observed
+    assert not any(isinstance(event, (ArbitrageOpportunityFound, SubmitOrder)) for event in outputs)
+    opportunity = LongArbitrageDetectionService().detect(left.id, right.id, left_book, right_book)
+    assert opportunity is not None
+    outputs = _process(engine, ArbitrageOpportunityFound("injected", cycle, pair, opportunity))
+    assert not any(isinstance(event, SubmitOrder) for event in outputs)
+    assert not state.executions
+
+
 def test_atomic_worker_opportunity_enters_central_state_without_redetection() -> None:
     """Store both books and forward the worker result without rerunning detection."""
     left_venue, right_venue = VenueID("left"), VenueID("right")

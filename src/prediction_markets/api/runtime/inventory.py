@@ -75,6 +75,7 @@ from prediction_markets.infrastructure.venues.predict.inventory import (
     PredictOutcomeInventoryAdapter,
 )
 from prediction_markets.infrastructure.venues.predict.mappers import PREDICT_VENUE_ID
+from prediction_markets.infrastructure.venues.hyperliquid.mappers import HYPERLIQUID_VENUE_ID
 
 
 _events = logging.getLogger("prediction_markets.events.runtime")
@@ -199,13 +200,16 @@ def _short_inventory_selection(
     market_key: str,
     pairs: tuple[MatchedContractPair, ...],
 ) -> tuple[str, dict[VenueID, MarketID], tuple[MatchedContractPair, ...]]:
-    """Resolve one selected cycle to exact venue markets and contract pairs.
+    """Resolve inventory-capable pairs, excluding Hyperliquid's read-only books.
 
     Raises
     ------
     RuntimeError
-        If one venue resolves to multiple markets in the same cycle.
+        If no inventory-capable pair remains, or a venue has multiple markets.
     """
+    pairs = tuple(pair for pair in pairs if HYPERLIQUID_VENUE_ID not in (pair.left.venue_id, pair.right.venue_id))
+    if not pairs:
+        raise RuntimeError("Selected event has no inventory-capable pairs; Hyperliquid is read-only")
     markets: dict[VenueID, MarketID] = {}
     for pair in pairs:
         for contract in (pair.left, pair.right):
@@ -276,6 +280,8 @@ def _existing_inventory_selections(
         selected = tuple(pair for pair in pairs if pair.key in requested)
         if not selected:
             continue
+        if any(HYPERLIQUID_VENUE_ID in (pair.left.venue_id, pair.right.venue_id) for pair in selected):
+            raise RuntimeError("Hyperliquid is read-only and cannot sell inventory")
         key = monitored_market_key(market)
         if key in split_market_keys:
             raise RuntimeError("Choose existing inventory or automatic splits for each event, not both")

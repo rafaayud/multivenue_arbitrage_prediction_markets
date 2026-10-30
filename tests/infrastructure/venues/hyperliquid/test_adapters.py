@@ -127,6 +127,8 @@ def test_shared_catalog_discovery_rest_books_and_health():
             assert len(requests) == 2
             exact = await discovery.discover(InstrumentDiscoveryQuery(venue_market_id="19990", search_text="irrelevant AGG title"))
             assert exact.markets == first.markets
+            agg_id = await discovery.discover(InstrumentDiscoveryQuery(venue_market_id="outcome:19990", search_text="irrelevant AGG title"))
+            assert agg_id == exact
             assert not (await discovery.discover(InstrumentDiscoveryQuery(search_text="unknown"))).markets
             no_book = await data.get_order_book(NO)
             assert str(no_book.outcome_id) == "19990:no"

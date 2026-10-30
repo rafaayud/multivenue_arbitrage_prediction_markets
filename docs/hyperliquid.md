@@ -2,13 +2,14 @@
 
 This integration reads native Hyperliquid outcome contracts. It is **read-only**:
 there is no order execution, inventory mutation, fee calculator or automatic
-cross-venue matching. Hyperliquid is not registered in the trading runtime.
+cross-venue matching. The runtime can monitor its public books for explicitly
+selected mainnet events, without generating Hyperliquid arbitrage signals.
 The existing trading routes remain limited to Polymarket, Predict.fun and Limitless.
 
 ## Enable the explorer
 
-Set these values in the control API environment and rebuild/restart the control
-API and frontend with the updated code:
+Set these values in both the control API and trading service environments, then
+rebuild/restart both services and the frontend with the updated code:
 
 ```dotenv
 HYPERLIQUID_ENABLED=true
@@ -32,6 +33,15 @@ The two books are independent snapshots; fetching them together does not make
 their timestamps identical. The UI displays ten levels per side; the HTTP API
 returns up to twenty.
 
+The main catalog's **Monitor** button also includes Hyperliquid when AGG provides
+an explicit `outcome:<id>` identifier. The runtime resolves that mainnet id and
+subscribes to both native YES and NO books over WebSocket. Testnet is available
+only through the separate explorer because AGG identifiers refer to mainnet.
+The dashboard labels Hyperliquid **Books only**. In a mixed event, supported
+Polymarket/Predict/Limitless pairs retain their signals and inventory controls;
+pairs involving Hyperliquid cannot generate signals, place orders or mutate inventory.
+Read-only venues do not participate in live-trading collateral or health checks.
+
 ## Public API and stream adapter
 
 - `GET /hyperliquid/markets?search_text=Fed&limit=100`: catalog, network and
@@ -52,7 +62,7 @@ The stream adapter uses native `l2Book` subscriptions, a bounded receive queue,
 application pings and reconnect backoff. It invalidates subscribed books after
 disconnects and distinguishes initial snapshots from subsequent updates. Its
 transport timestamps and queue metrics use the existing instrumentation. The
-stream adapter is available directly; the dashboard's explorer uses REST polling.
+runtime uses this stream for monitored events; the separate explorer uses REST polling.
 
 Run a public metadata/health/WebSocket check without starting the trading runtime:
 

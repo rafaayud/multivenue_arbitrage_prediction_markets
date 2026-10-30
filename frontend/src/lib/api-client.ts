@@ -7,6 +7,7 @@ import type {
   ArbitrageCandidate,
   RegularMarketMonitor,
 } from "@/types/agg"
+import { MONITORABLE_VENUES } from "@/types/agg"
 import type { RuntimeState, SignalSettings } from "@/types/runtime"
 import type { PnlDashboard, PnlView, TimeRange } from "@/types/pnl"
 import type { VenueHealthReport } from "@/types/venue-health"
@@ -209,12 +210,12 @@ export const apiClient = {
       body: JSON.stringify({
         markets: candidate.markets
           .filter(({ venue_id }) =>
-            ["POLYMARKET", "LIMITLESS", "PREDICT"].includes(
+            MONITORABLE_VENUES.has(
               venue_id.toUpperCase(),
             ),
           )
           .map(({ venue_id, external_market_id, title }) => ({
-            venue_id,
+            venue_id: venue_id.toUpperCase(),
             external_market_id,
             search_text: candidate.event_title ?? title,
           })),

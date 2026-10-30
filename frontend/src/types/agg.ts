@@ -1,3 +1,6 @@
+/** Native venues accepted by monitoring when enabled in the runtime. */
+export const MONITORABLE_VENUES = new Set(["POLYMARKET", "LIMITLESS", "PREDICT", "HYPERLIQUID"])
+
 export interface ArbitrageVenueMarket {
   venue_id: string
   market_id: string

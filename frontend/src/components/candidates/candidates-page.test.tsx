@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react"
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { CandidatesPage } from "@/components/candidates/candidates-page"
 import type { AggDiscoveryView } from "@/features/agg/use-agg-candidates"
@@ -29,6 +29,8 @@ vi.mock("@/features/agg/use-agg-candidates", () => ({
 }))
 
 describe("CandidatesPage", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
   beforeEach(() => {
     state.candidates = []
     state.error = null
@@ -89,5 +91,28 @@ describe("CandidatesPage", () => {
     expect(screen.getByText("Volume $3,430.33")).toBeInTheDocument()
     expect(screen.queryByText(/458994005|326845/)).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Needs match" })).toBeDisabled()
+  })
+
+  test("sends Hyperliquid from Monitor without dropping its native outcome id", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      monitor_key: "regular:fed", pair_count: 2, venue_ids: ["POLYMARKET", "HYPERLIQUID"],
+    }), { status: 200 }))
+    vi.stubGlobal("fetch", fetch)
+    state.candidates = [{
+      market_id: "fed", title: "No change", event_title: "Fed", venue_event_id: null,
+      return_rate: 0, observed_at: "2026-10-30T12:00:00Z", starts_at: null, ends_at: null,
+      volume_usd: null, liquidity_usd: null, liquidity_tier: null,
+      markets: [
+        { venue_id: "POLYMARKET", market_id: "poly", external_market_id: "3215007", title: "No change", yes_outcome_id: "y", no_outcome_id: "n", volume_usd: null },
+        { venue_id: "HYPERLIQUID", market_id: "hyper", external_market_id: "outcome:19988", title: "No change", yes_outcome_id: "y", no_outcome_id: "n", volume_usd: null },
+        { venue_id: "KALSHI", market_id: "kalshi", external_market_id: "KXFEDDECISION-26DEC-H0", title: "No change", yes_outcome_id: "y", no_outcome_id: "n", volume_usd: null },
+      ],
+    }]
+    render(<CandidatesPage />)
+    fireEvent.click(screen.getByRole("button", { name: "Monitor" }))
+    expect(await screen.findByText(/POLYMARKET \+ HYPERLIQUID.*books only/)).toBeInTheDocument()
+    const body = JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.markets.map((market: { venue_id: string }) => market.venue_id)).toEqual(["POLYMARKET", "HYPERLIQUID"])
+    expect(body.markets[1].external_market_id).toBe("outcome:19988")
   })
 })

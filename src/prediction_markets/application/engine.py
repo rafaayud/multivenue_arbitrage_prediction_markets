@@ -232,6 +232,7 @@ class TradingEngine:
             None,
         ]
         | None = None,
+        monitor_only_venues: frozenset[VenueID] = frozenset(),
     ) -> None:
         """
         Parameters
@@ -242,10 +243,15 @@ class TradingEngine:
             Prepared taker-fee calculators used synchronously in the hot path.
         observe_orderbooks
             Optional live observer called once for each complete pair evaluation.
+        monitor_only_venues
+            Venues whose books are stored and observed without signals or orders,
+            including when fees are unavailable. Execution configuration cannot
+            override this composition-level restriction.
         """
         self.dispatcher = dispatcher
         self.state = dispatcher.state
         self._fees = dict(fees_by_venue)
+        self._monitor_only_venues = frozenset(monitor_only_venues)
         self._planning = ArbitragePlanningService()
         self._accounting = ExecutionAccounting(self.state)
         self._execution_lifecycle = _ExecutionLifecycle(
@@ -733,6 +739,8 @@ class TradingEngine:
             return ()
         if self._observe_orderbooks is not None:
             self._observe_orderbooks(pair, left, right)
+        if pair.left.venue_id in self._monitor_only_venues or pair.right.venue_id in self._monitor_only_venues:
+            return ()
         found: list[ApplicationEvent] = []
         detectors = self._detectors_for(pair, config)
         enabled = (config.monitor_long, config.monitor_short)
@@ -916,6 +924,8 @@ class TradingEngine:
         active_executions = self.active_execution_count()
         if (
             config is None
+            or event.pair.left.venue_id in self._monitor_only_venues
+            or event.pair.right.venue_id in self._monitor_only_venues
             or not self.state.trading_enabled
             or event.id in self.state.executions
             or event.id in self._admission_routes

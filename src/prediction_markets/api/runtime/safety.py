@@ -92,7 +92,14 @@ def _transient_health_failure(snapshot: VenueHealthSnapshot) -> bool:
 
 
 class RuntimeSafety:
-    """Own active-run health, collateral refresh, and fail-closed recording."""
+    """Own active-run health, collateral refresh, and fail-closed recording.
+
+    Parameters
+    ----------
+    monitor_only_venues
+        Venues restricted to public books, excluded from private collateral reads
+        and the health checks that can stop live trading.
+    """
 
     def __init__(
         self,
@@ -101,15 +108,18 @@ class RuntimeSafety:
         engine: TradingEngine,
         pipeline: TradingPipeline,
         execution: dict[VenueID, ExecutionPort],
+        *,
+        monitor_only_venues: frozenset[VenueID] = frozenset(),
     ) -> None:
         self._venue_health_service = venue_health_service
         self.state = state
         self.engine = engine
         self.pipeline = pipeline
         self._execution = execution
+        self._monitor_only_venues = monitor_only_venues
 
     def _active_venue_ids(self) -> frozenset[VenueID]:
-        """Return venues participating in the current monitored pairs."""
+        """Return monitored venues subject to live-trading safety checks."""
         if self.state is None:
             return frozenset()
         return frozenset(
@@ -117,6 +127,7 @@ class RuntimeSafety:
             for pairs in self.state.matches.values()
             for pair in pairs
             for contract in (pair.left, pair.right)
+            if contract.venue_id not in self._monitor_only_venues
         )
 
     async def monitor_active_venue_health(self, interval_seconds: float) -> None:
@@ -220,7 +231,7 @@ class RuntimeSafety:
         self,
         additional_pairs: tuple[MatchedContractPair, ...] = (),
     ) -> dict[VenueID, Decimal]:
-        """Read spendable BUY collateral for every currently matched venue.
+        """Read spendable BUY collateral, excluding venues restricted to books.
 
         Parameters
         ----------
@@ -287,6 +298,7 @@ class RuntimeSafety:
             *(
                 read_one(venue_id, tuple(contract_ids))
                 for venue_id, contract_ids in contracts_by_venue.items()
+                if venue_id not in self._monitor_only_venues
             ),
         )
         return dict(observed)

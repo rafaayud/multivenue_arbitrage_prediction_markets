@@ -350,8 +350,9 @@ class _MarketFeedCoordinator:
         }
         for event in self._matches.values():
             for pair in event.pairs:
-                contracts[pair.left.venue_id][pair.left.id] = pair.left
-                contracts[pair.right.venue_id][pair.right.id] = pair.right
+                for contract in (pair.left, pair.right):
+                    if contract.venue_id in contracts:
+                        contracts[contract.venue_id][contract.id] = contract
         for venue_id, values in contracts.items():
             contract_values = tuple(values.values())
             contract_ids = tuple(values)
@@ -372,11 +373,11 @@ class _MarketFeedCoordinator:
         venue_id: VenueID,
         contract_ids: tuple[ContractID, ...],
     ) -> None:
-        """Warm fee and execution metadata before books become actionable."""
-        await asyncio.gather(
-            self._fees[venue_id].prepare(contract_ids),
-            self._preload_execution(venue_id, contract_ids),
-        )
+        """Warm available fee metadata; read-only venues need only public books."""
+        calculator = self._fees.get(venue_id)
+        if calculator is None:
+            return
+        await asyncio.gather(calculator.prepare(contract_ids), self._preload_execution(venue_id, contract_ids))
 
     async def _preload_execution(
         self,

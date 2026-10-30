@@ -1,6 +1,9 @@
 """Verify the public outcome explorer is read-only and handles upstream failures."""
 
 import json
+from dataclasses import replace
+from decimal import Decimal
+from types import SimpleNamespace
 
 import httpx
 from fastapi import FastAPI
@@ -72,8 +75,8 @@ def test_upstream_failure_is_not_an_empty_successful_catalog():
         client.portal.call(upstream.aclose)
 
 
-def test_enabled_data_does_not_admit_hyperliquid_to_trading(monkeypatch):
-    """Reject Hyperliquid monitoring even when its public explorer is enabled."""
+def test_testnet_explorer_does_not_resolve_mainnet_catalog_identifiers(monkeypatch):
+    """Keep AGG mainnet selection separate from the optional testnet explorer."""
     from prediction_markets.api.auth import require_trading_key
     from prediction_markets.api.control_main import app as control_app
     from prediction_markets.api.trading_main import app as trading_app
@@ -90,6 +93,65 @@ def test_enabled_data_does_not_admit_hyperliquid_to_trading(monkeypatch):
                 {"venue_id": "POLYMARKET", "external_market_id": "1"},
             ]})
             assert result.status_code == 422
-            assert "supported" in result.json()["detail"]
+            assert "mainnet" in result.json()["detail"]
     finally:
         trading_app.dependency_overrides.pop(require_trading_key, None)
+
+
+def test_mainnet_catalog_monitor_subscribes_both_sides_without_execution(monkeypatch):
+    """Keep native AGG ids through monitoring and exclude read-only trading I/O."""
+    from prediction_markets.api.auth import require_trading_key
+    from prediction_markets.api.runtime import facade
+    from prediction_markets.api.trading_main import app
+    from prediction_markets.domain.ports.instrument_discovery import InstrumentDiscoveryResult
+    from prediction_markets.domain.shared.value_objects import ContractID, MarketID, VenueID
+    from prediction_markets.infrastructure.venues.hyperliquid.mappers import outcome_to_market
+
+    outcome = {
+        "outcome": 19988, "name": "Fed no change", "description": "expiry:20991231-1900",
+        "sideSpecs": [{"name": "Yes"}, {"name": "No"}],
+    }
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"outcomes": [outcome], "questions": []}
+        if json.loads(request.content)["type"] == "outcomeMeta" else [],
+    )))
+    monkeypatch.setenv("HYPERLIQUID_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_NETWORK", "mainnet")
+    monkeypatch.setattr(facade, "HyperliquidMarketCatalog", lambda: HyperliquidMarketCatalog(client=upstream))
+    market, contracts = outcome_to_market(outcome, {})
+    poly = VenueID("POLYMARKET")
+    hyper = VenueID("HYPERLIQUID")
+    poly_market = replace(market, id=MarketID("poly"), venue_id=poly)
+    poly_contracts = tuple(replace(
+        contract, id=ContractID(f"poly:{index}"), market_id=poly_market.id, venue_id=poly,
+    ) for index, contract in enumerate(contracts))
+
+    async def discover(query):
+        return InstrumentDiscoveryResult((poly_market,), poly_contracts)
+
+    async def prepare(contract_ids):
+        pass
+
+    app.dependency_overrides[require_trading_key] = lambda: None
+    try:
+        with TestClient(app) as client:
+            runtime = app.state.arbitrage_runtime
+            runtime.market_matcher._discovery[poly] = SimpleNamespace(discover=discover)
+            runtime._feed._fees[poly].prepare = prepare
+            result = client.post("/arbitrage-candidates/monitor", json={"markets": [
+                {"venue_id": "POLYMARKET", "external_market_id": "poly"},
+                {"venue_id": "HYPERLIQUID", "external_market_id": "outcome:19988"},
+            ]})
+            assert result.status_code == 200, result.text
+            assert set(result.json()["venue_ids"]) == {"POLYMARKET", "HYPERLIQUID"}
+            assert result.json()["pair_count"] == 2
+            assert set(runtime._feed._desired[hyper]) == {contract.id for contract in contracts}
+            assert hyper not in runtime._execution
+            runtime.engine.process(next(iter(runtime._feed._matches.values())))
+            assert runtime._safety._active_venue_ids() == {poly}
+            runtime._execution[poly] = SimpleNamespace(get_available_collateral=lambda ids: Decimal("10"))
+            collateral = client.portal.call(runtime._safety.read_available_collateral)
+            assert collateral == {poly: Decimal("10")}
+            client.portal.call(upstream.aclose)
+    finally:
+        app.dependency_overrides.pop(require_trading_key, None)

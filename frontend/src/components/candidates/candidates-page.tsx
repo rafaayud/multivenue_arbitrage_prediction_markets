@@ -19,12 +19,10 @@ import {
 } from "@/features/agg/use-agg-candidates"
 import { apiClient } from "@/lib/api-client"
 import { formatPercent, formatTimestamp } from "@/lib/formatters"
-import type { ArbitrageCandidate } from "@/types/agg"
+import { MONITORABLE_VENUES, type ArbitrageCandidate } from "@/types/agg"
 import { HyperliquidOutcomes } from "@/components/candidates/hyperliquid-outcomes"
 
 type MonitorResult = { status: "success" | "error"; message: string }
-
-const MONITORABLE_VENUES = new Set(["POLYMARKET", "LIMITLESS", "PREDICT"])
 
 function candidateKey(candidate: ArbitrageCandidate): string {
   return candidate.markets
@@ -119,7 +117,7 @@ function AggCandidates() {
         ...current,
         [key]: {
           status: "success",
-          message: `${result.venue_ids.join(" + ")} · ${result.pair_count} pairs`,
+          message: `${result.venue_ids.join(" + ")} · ${result.pair_count} pairs${result.venue_ids.includes("HYPERLIQUID") ? " · Hyperliquid: books only" : ""}`,
         },
       }))
     } catch (reason) {

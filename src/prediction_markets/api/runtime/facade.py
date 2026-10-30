@@ -68,6 +68,11 @@ from prediction_markets.domain.trading.entities import (
 from prediction_markets.domain.trading.enums import ArbitrageExecutionStatus
 from prediction_markets.infrastructure.binary_journal import BinaryJournal
 from prediction_markets.infrastructure.metrics import observe_arbitrage_orderbooks
+from prediction_markets.infrastructure.venues.hyperliquid.catalog import HyperliquidMarketCatalog
+from prediction_markets.infrastructure.venues.hyperliquid.config import HyperliquidSettings, hyperliquid_enabled
+from prediction_markets.infrastructure.venues.hyperliquid.instrument_discovery import HyperliquidInstrumentDiscoveryAdapter
+from prediction_markets.infrastructure.venues.hyperliquid.market_data_stream import HyperliquidMarketDataStreamAdapter
+from prediction_markets.infrastructure.venues.hyperliquid.mappers import HYPERLIQUID_VENUE_ID
 from prediction_markets.infrastructure.venues.limitless.catalog import LimitlessMarketCatalog
 from prediction_markets.infrastructure.venues.limitless.execution import (
     LimitlessExecutionAdapter,
@@ -128,6 +133,7 @@ from prediction_markets.infrastructure.venues.predict.taker_fees import (
 
 
 _LIMITLESS_REDEEM_INTERVAL_SECONDS = 300.0
+_MONITOR_ONLY_VENUES = frozenset({HYPERLIQUID_VENUE_ID})
 
 
 def _trading_state_status(state: TradingState) -> dict[str, object]:
@@ -277,6 +283,12 @@ class ArbitrageRuntime:
                 LIMITLESS_VENUE_ID: LimitlessMarketDataStreamAdapter(),
                 PREDICT_VENUE_ID: PredictMarketDataStreamAdapter(),
             }
+            # AGG outcome identifiers refer to mainnet; testnet stays in the explorer.
+            if hyperliquid_enabled() and HyperliquidSettings.from_env().network == "mainnet":
+                hyperliquid_catalog = HyperliquidMarketCatalog()
+                stack.push_async_callback(hyperliquid_catalog.close)
+                discovery[HYPERLIQUID_VENUE_ID] = HyperliquidInstrumentDiscoveryAdapter(catalog=hyperliquid_catalog)
+                streams[HYPERLIQUID_VENUE_ID] = HyperliquidMarketDataStreamAdapter()
             self.market_matcher = MarketMatcher(discovery)
             sync_interval = Decimal(
                 os.getenv("JOURNAL_SYNC_INTERVAL_MS", "10"),
@@ -301,6 +313,7 @@ class ArbitrageRuntime:
                 self.dispatcher,
                 fees,
                 observe_orderbooks=observe_arbitrage_orderbooks,
+                monitor_only_venues=_MONITOR_ONLY_VENUES,
             )
             self.engine.configure(
                 LiveArbitrageConfig(
@@ -320,6 +333,7 @@ class ArbitrageRuntime:
                 self.engine,
                 self.pipeline,
                 self._execution,
+                monitor_only_venues=_MONITOR_ONLY_VENUES,
             )
             self._inventory = ShortInventoryCoordinator(
                 self.state,
@@ -440,6 +454,8 @@ class ArbitrageRuntime:
         """Add one explicit candidate to the existing discovery and feed runtime."""
         if self._feed is None:
             raise RuntimeError("Arbitrage runtime is not initialized")
+        if any(selection.venue_id == HYPERLIQUID_VENUE_ID for selection in selections) and HYPERLIQUID_VENUE_ID not in self._feed.supported_venues:
+            raise ValueError("Hyperliquid monitoring requires HYPERLIQUID_ENABLED=true and HYPERLIQUID_NETWORK=mainnet in the trading service")
         supported = tuple(
             selection
             for selection in selections
@@ -679,6 +695,7 @@ class ArbitrageRuntime:
                 inventory.prepared_market_keys if inventory else ()
             ),
             "regular_markets": self._feed.regular_markets if self._feed else (),
+            "monitor_only_venues": sorted(map(str, _MONITOR_ONLY_VENUES)),
             **(_trading_state_status(state) if state is not None else {}),
         }
 

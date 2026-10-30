@@ -59,16 +59,19 @@ export function DashboardPage() {
   const [inventoryPairs, setInventoryPairs] = useState<InventorySellPair[]>(savedSettings.existing_inventory_pairs ?? [])
   const restoredRunId = useRef<string | null>(null)
   const regularMarkets = runtime.runtime?.regular_markets ?? []
+  const monitorOnlyVenues = runtime.runtime?.monitor_only_venues ?? []
+  const inventoryCapablePair = (pair: MarketMatchPair) =>
+    !monitorOnlyVenues.includes(pair.left.venue_id) && !monitorOnlyVenues.includes(pair.right.venue_id)
   const tradingActive = ["preparing", "running", "stopping"].includes(
     trading.run?.status ?? "",
   )
   const selectedShortMarketKeys = (tradingActive
     ? (trading.run?.short_market_keys ?? shortMarketKeys)
-    : shortMarketKeys).filter((key) => regularMarkets.some((market) => market.monitor_key === key))
+    : shortMarketKeys).filter((key) => regularMarkets.some((market) => market.monitor_key === key && market.markets.filter((venue) => !monitorOnlyVenues.includes(venue.venue_id)).length >= 2))
   const selectedInventoryPairs = (tradingActive
     ? (trading.run?.existing_inventory_pairs ?? [])
     : inventoryPairs).filter((key) => regularMarkets.some((market) =>
-      market.pairs.some((pair) => selectedInventoryPair(pair, [key])),
+      market.pairs.some((pair) => inventoryCapablePair(pair) && selectedInventoryPair(pair, [key])),
     ))
   const manualInventoryMarketKeys = regularMarkets.filter((market) =>
     selectedShortMarketKeys.includes(market.monitor_key)
@@ -230,7 +233,7 @@ export function DashboardPage() {
           <CardHeader>
             <CardTitle>Connected events</CardTitle>
             <CardDescription>
-              Native order books currently included in cross-venue detection.
+              Live native books for selected events. Read-only venues do not generate signals or orders.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 lg:grid-cols-2">
@@ -298,6 +301,7 @@ export function DashboardPage() {
                         {market.markets.map((venueMarket) => (
                           <Badge key={venueMarket.venue_id} variant="outline">
                             {venueMarket.venue_id}
+                            {monitorOnlyVenues.includes(venueMarket.venue_id) && " · Books only"}
                           </Badge>
                         ))}
                         <Badge variant="secondary">
@@ -319,9 +323,10 @@ export function DashboardPage() {
                         aria-pressed={selectedShortMarketKeys.includes(
                           market.monitor_key,
                         )}
-                        title="Prepare collateral with splits for this event. Disable existing-inventory pairs first."
+                        title="Prepare collateral only at trading-capable venues. Read-only venues are excluded."
                         disabled={
                           shortSelectionLocked ||
+                          market.markets.filter((venue) => !monitorOnlyVenues.includes(venue.venue_id)).length < 2 ||
                           market.pairs.some((pair) => selectedInventoryPair(pair, selectedInventoryPairs)) ||
                           (market.pair_count === 0 &&
                             !selectedShortMarketKeys.includes(
@@ -350,7 +355,10 @@ export function DashboardPage() {
                       </Button>
                     </div>
                   </div>
-                  {market.pairs.length > 0 && (
+                  {market.markets.some((venue) => monitorOnlyVenues.includes(venue.venue_id)) && (
+                    <p className="mt-3 text-xs text-muted-foreground">Hyperliquid books are monitored. Its signals, orders and inventory operations remain disabled while fees are unverified.</p>
+                  )}
+                  {market.pairs.some(inventoryCapablePair) && (
                     <details className="mt-3 border-t border-border/60 pt-3" open={market.pairs.some((pair) => selectedInventoryPair(pair, selectedInventoryPairs)) || undefined}>
                       <summary className="cursor-pointer text-xs font-medium">
                         Sell existing inventory
@@ -370,12 +378,12 @@ export function DashboardPage() {
                           size="sm"
                           variant="outline"
                           className="justify-self-start"
-                          onClick={() => toggleAllInventoryPairs(market.pairs)}
+                          onClick={() => toggleAllInventoryPairs(market.pairs.filter(inventoryCapablePair))}
                         >
-                          {market.pairs.every((pair) => selectedInventoryPair(pair, selectedInventoryPairs))
+                          {market.pairs.filter(inventoryCapablePair).every((pair) => selectedInventoryPair(pair, selectedInventoryPairs))
                             ? "Clear all" : "Select all"}
                         </Button>
-                        {market.pairs.map((pair) => (
+                        {market.pairs.filter(inventoryCapablePair).map((pair) => (
                           <label key={JSON.stringify(inventoryPairKey(pair))} className="flex items-start gap-2 text-xs">
                             <input
                               type="checkbox"
