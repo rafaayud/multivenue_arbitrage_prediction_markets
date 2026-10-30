@@ -17,6 +17,7 @@ from prediction_markets.api.routers import (
     alertmanager_webhook,
     alerting,
     candidates,
+    hyperliquid,
     system,
     trading_activity,
 )
@@ -31,6 +32,8 @@ from prediction_markets.infrastructure.agg.arbitrage_stream import (
 from prediction_markets.infrastructure.agg.market_explorer import (
     AggMarketExplorerAdapter,
 )
+from prediction_markets.infrastructure.venues.hyperliquid.catalog import HyperliquidMarketCatalog
+from prediction_markets.infrastructure.venues.hyperliquid.config import hyperliquid_enabled
 from prediction_markets.infrastructure.venues.limitless.health import (
     LimitlessHealthAdapter,
 )
@@ -87,11 +90,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         AggArbitrageStreamAdapter()
     )
     app.state.agg_market_explorer = AggMarketExplorerAdapter()
+    app.state.hyperliquid_catalog = HyperliquidMarketCatalog() if hyperliquid_enabled() else None
     app.state.pnl_service = pnl_service
     app.state.venue_health_service = venue_health_service
     try:
         yield
     finally:
+        if app.state.hyperliquid_catalog is not None:
+            await app.state.hyperliquid_catalog.close()
         await pnl_service.close()
         await venue_health_service.close()
 
@@ -101,5 +107,6 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(alertmanager_webhook.router)
 app.include_router(alerting.router)
 app.include_router(candidates.query_router)
+app.include_router(hyperliquid.router)
 app.include_router(system.public_router)
 app.include_router(trading_activity.query_router)

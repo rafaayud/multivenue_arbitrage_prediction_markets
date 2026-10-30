@@ -9,6 +9,10 @@ Detect and execute two-leg opportunities across **Polymarket, Predict.fun and
 Limitless**, with an operations dashboard for signals, execution, recovery and
 PnL.
 
+An optional [Hyperliquid YES/NO explorer](docs/hyperliquid.md) provides native
+market metadata and public order books. It is read-only: Hyperliquid trading,
+inventory operations and arbitrage execution are not enabled.
+
 This repository focuses on **political and policy events**, including central-bank
 interest-rate decisions. It combines a Python backend, domain models and
 ports-and-adapters boundaries with venue-specific market data and execution.

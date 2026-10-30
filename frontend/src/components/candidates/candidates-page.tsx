@@ -20,6 +20,7 @@ import {
 import { apiClient } from "@/lib/api-client"
 import { formatPercent, formatTimestamp } from "@/lib/formatters"
 import type { ArbitrageCandidate } from "@/types/agg"
+import { HyperliquidOutcomes } from "@/components/candidates/hyperliquid-outcomes"
 
 type MonitorResult = { status: "success" | "error"; message: string }
 
@@ -60,8 +61,26 @@ function monitorableVenueCount(candidate: ArbitrageCandidate): number {
   ).size
 }
 
-/** Present searchable policy events with explicit multi-venue monitoring. */
+/** Separate executable cross-venue discovery from the public outcome explorer. */
 export function CandidatesPage() {
+  const [source, setSource] = useState<"agg" | "hyperliquid">("agg")
+  return (
+    <>
+      <nav aria-label="Catalog source" className="mb-5 flex flex-wrap gap-2">
+        <Button variant={source === "agg" ? "secondary" : "ghost"} aria-pressed={source === "agg"} onClick={() => setSource("agg")}>
+          Cross-venue events
+        </Button>
+        <Button variant={source === "hyperliquid" ? "secondary" : "ghost"} aria-pressed={source === "hyperliquid"} onClick={() => setSource("hyperliquid")}>
+          Hyperliquid outcomes
+        </Button>
+      </nav>
+      {source === "agg" ? <AggCandidates /> : <HyperliquidOutcomes />}
+    </>
+  )
+}
+
+/** Present searchable policy events with explicit multi-venue monitoring. */
+function AggCandidates() {
   const [view, setView] = useState<AggDiscoveryView>("markets")
   const [searchDraft, setSearchDraft] = useState("")
   const [searchText, setSearchText] = useState("")

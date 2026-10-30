@@ -10,6 +10,7 @@ import type {
 import type { RuntimeState, SignalSettings } from "@/types/runtime"
 import type { PnlDashboard, PnlView, TimeRange } from "@/types/pnl"
 import type { VenueHealthReport } from "@/types/venue-health"
+import type { HyperliquidCatalog, HyperliquidBooks } from "@/types/hyperliquid"
 import type { ManualExecutionResolutionInput } from "@/types/execution"
 import type {
   TradingRun,
@@ -71,6 +72,15 @@ async function request<T>(
 
 /** Typed HTTP operations used by dashboard features. */
 export const apiClient = {
+  hyperliquidMarkets: (searchText: string, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ limit: "500" })
+    if (searchText) params.set("search_text", searchText)
+    return request<HyperliquidCatalog>(`/hyperliquid/markets?${params}`, { signal })
+  },
+
+  hyperliquidBooks: (marketId: string, signal?: AbortSignal) =>
+    request<HyperliquidBooks>(`/hyperliquid/markets/${encodeURIComponent(marketId)}/books`, { signal }),
+
   health: (signal?: AbortSignal) =>
     request<MessageResponse>("/health", { signal }),
 
