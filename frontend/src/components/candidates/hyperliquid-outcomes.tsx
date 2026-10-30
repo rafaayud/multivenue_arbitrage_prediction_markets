@@ -45,7 +45,7 @@ export function HyperliquidOutcomes() {
       </div>
       <form onSubmit={submitSearch} className="mb-5 flex flex-wrap gap-2">
         <label className="sr-only" htmlFor="hyperliquid-search">Search Hyperliquid outcomes</label>
-        <input id="hyperliquid-search" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Search a question, e.g. FOMC or Bitcoin" type="search" maxLength={200} className="h-10 min-w-48 flex-1 rounded-lg border border-border bg-background px-3 text-sm" />
+        <input id="hyperliquid-search" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Search a question, e.g. Fed or Bitcoin" type="search" maxLength={200} className="h-10 min-w-48 flex-1 rounded-lg border border-border bg-background px-3 text-sm" />
         <Button type="submit">Search outcomes</Button>
         <Button type="button" variant="outline" onClick={() => setReload((value) => value + 1)}>Refresh catalog</Button>
       </form>

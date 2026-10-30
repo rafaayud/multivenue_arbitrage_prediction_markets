@@ -34,7 +34,7 @@ returns up to twenty.
 
 ## Public API and stream adapter
 
-- `GET /hyperliquid/markets?search_text=FOMC&limit=100`: catalog, network and
+- `GET /hyperliquid/markets?search_text=Fed&limit=100`: catalog, network and
   explicit `trading_enabled: false`. A disabled integration returns an empty
   catalog with `enabled: false`.
 - `GET /hyperliquid/markets/{outcome_id}/books`: native YES and NO snapshots.
@@ -84,3 +84,21 @@ accounting on the chosen network. The current contract metadata uses a price
 tick of `0.00001` and whole-token lots, consistent with the
 [Nautilus integration](https://github.com/nautechsystems/nautilus_trader/blob/develop/docs/integrations/hyperliquid.md).
 No live orders or inventory operations are part of the data check above.
+
+## Live frontend check
+
+With the read-only integration enabled in the local application, run this from
+`frontend/` in PowerShell:
+
+```powershell
+$env:HYPERLIQUID_LIVE_BASE_URL = 'http://localhost:8080'
+npm.cmd test -- src/components/candidates/hyperliquid-outcomes.live.test.tsx
+```
+
+This opt-in test renders the catalog component in JSDOM and reads real data
+through the deployed `/api` proxy. It searches for the Fed rate-increase outcome,
+checks displayed YES/NO bid/ask prices and sizes against the actual API response,
+and waits for a subsequent poll. It sends no trading requests. The check requires
+that outcome to remain listed with liquidity; it is skipped in ordinary unit
+test runs when `HYPERLIQUID_LIVE_BASE_URL` is unset. It does not replace visual
+browser inspection.
