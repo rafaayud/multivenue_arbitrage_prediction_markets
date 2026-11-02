@@ -763,7 +763,14 @@ def test_execution_stream_rejects_unauthenticated_clients() -> None:
     assert error.value.code == 1008
 
 
-def test_completed_execution_reports_actual_fees_and_locked_pnl() -> None:
+@pytest.mark.parametrize(
+    ("recovery_summary_fee", "recovery_summary_price"),
+    [(None, None), (Decimal("0.02"), Decimal("0.5")), (Decimal("0.99"), Decimal("0.6"))],
+)
+def test_completed_execution_reports_actual_fees_and_locked_pnl(
+    recovery_summary_fee: Decimal | None,
+    recovery_summary_price: Decimal | None,
+) -> None:
     """Calculate post-trade PnL from actual fills and normalized venue fees."""
     journal = ArbitrageExecutionJournal(
         id="execution-fees",
@@ -861,14 +868,14 @@ def test_completed_execution_reports_actual_fees_and_locked_pnl() -> None:
         quantity=Decimal("2"),
         filled_quantity=Decimal("2"),
         limit_price=Decimal("0.5"),
-        average_price=Decimal("0.5"),
+        average_price=recovery_summary_price,
         source_contract_id="polymarket:condition:token",
         source_side="buy",
         source_price=Decimal("0.4"),
         source_fee_amount=Decimal("0.01"),
         source_fee_currency="USD",
-        recovery_fee_amount=Decimal("0.02"),
-        recovery_fee_currency="USD",
+        recovery_fee_amount=recovery_summary_fee,
+        recovery_fee_currency="USD" if recovery_summary_fee is not None else None,
         actual_gross_result=Decimal("0.2"),
         actual_net_result=Decimal("0.17"),
         portfolio_id="portfolio-1",
@@ -973,6 +980,9 @@ def test_completed_execution_reports_actual_fees_and_locked_pnl() -> None:
     assert with_recovery.net_pnl_usd == Decimal("0.17074")
     assert with_recovery.priced_terminal_executions == 2
     assert with_recovery.unpriced_terminal_executions == 0
+    assert next(
+        venue.fees_usd for venue in with_recovery.venues if venue.venue_id == "PREDICT"
+    ) == Decimal("0.02")
     assert sum(
         (venue.net_contribution_usd for venue in with_recovery.venues),
         Decimal("0"),

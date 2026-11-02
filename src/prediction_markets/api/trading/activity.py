@@ -1068,6 +1068,12 @@ def _internal_pnl_out(
     -------
     InternalPnlSummaryOut
         All-time priced totals, venue contributions, and cumulative series.
+
+    Notes
+    -----
+    - Recovery cash flow and fees use priced lifecycle totals minus parent-leg
+      economics and the remaining pair payout. Stale recovery summaries cannot
+      override normalized fills.
     """
     priced = [
         journal
@@ -1095,6 +1101,8 @@ def _internal_pnl_out(
     ]
     for journal in priced:
         recovery = recovery_by_execution.get(journal.execution_id)
+        parent_fees = Decimal("0")
+        parent_cash_flow = Decimal("0")
         for venue_id in {journal.leg1.venue_id, journal.leg2.venue_id}:
             executions_by_venue[venue_id] += 1
         for leg in (journal.leg1, journal.leg2):
@@ -1131,18 +1139,17 @@ def _internal_pnl_out(
                 if leg.side == OrderSide.BUY.value
                 else Decimal("-1")
             )
-            gross_by_venue[leg.venue_id] -= (
-                direction * leg.filled_quantity * average_fill_price
-            )
+            cash_flow = -direction * leg.filled_quantity * average_fill_price
+            gross_by_venue[leg.venue_id] += cash_flow
+            parent_cash_flow += cash_flow
             fees_by_venue[leg.venue_id] += fee
+            parent_fees += fee
         signed_pair_quantity = (
             journal.leg1.filled_quantity
             if journal.leg1.side == OrderSide.BUY.value
             else -journal.leg1.filled_quantity
         )
         if recovery is not None:
-            assert recovery.average_price is not None
-            assert recovery.recovery_fee_amount is not None
             recovery_direction = (
                 Decimal("1")
                 if recovery.side == OrderSide.BUY.value
@@ -1150,12 +1157,12 @@ def _internal_pnl_out(
             )
             if recovery.contract_id == journal.leg1.contract_id:
                 signed_pair_quantity += recovery_direction * recovery.filled_quantity
-            gross_by_venue[recovery.venue_id] -= (
-                recovery_direction
-                * recovery.filled_quantity
-                * recovery.average_price
+            gross_by_venue[recovery.venue_id] += (
+                journal.gross_locked_pnl_usd - parent_cash_flow - signed_pair_quantity
             )
-            fees_by_venue[recovery.venue_id] += recovery.recovery_fee_amount
+            fees_by_venue[recovery.venue_id] += (
+                journal.total_fee_settlement_cost_usd - parent_fees
+            )
         pair_share = signed_pair_quantity / 2
         gross_by_venue[journal.leg1.venue_id] += pair_share
         gross_by_venue[journal.leg2.venue_id] += pair_share
