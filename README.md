@@ -7,7 +7,7 @@ A modular, event-driven prediction-market arbitrage engine with an
 
 Detect and execute two-leg opportunities across **Polymarket, Predict.fun and
 Limitless**, with an operations dashboard for signals, execution, recovery and
-PnL.
+profit and loss (PnL).
 
 An optional [Hyperliquid YES/NO explorer](docs/hyperliquid.md) provides native
 market metadata and public order books. It is read-only: Hyperliquid trading,
