@@ -13,7 +13,7 @@ resource "aws_iam_role" "github_deploy" {
       Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
       Condition = { StringEquals = {
         "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        "token.actions.githubusercontent.com:sub" = "repo:rafaayud/multivenue_arbitrage_prediction_markets:environment:lightsail"
+        "token.actions.githubusercontent.com:sub" = "repo:rafaayud@145474430/multivenue_arbitrage_prediction_markets@1398545359:environment:lightsail"
       } }
     }]
   })
