@@ -65,7 +65,8 @@ contain the selected committed source, not local uncommitted changes.
 
 Apply Terraform to create the GitHub OIDC provider and the deployment role.
 If the AWS account already has this OIDC provider, import it instead of creating
-a duplicate. The role can query this instance and modify only its port rules;
+a duplicate. The role can query instance metadata in this account's Ireland region
+and modify only this deployment instance's port rules;
 it cannot create instances or read venue credentials through AWS APIs.
 
 In repository Settings > Environments, create lightsail and restrict deployment

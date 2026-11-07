@@ -24,9 +24,12 @@ resource "aws_iam_role_policy" "github_deploy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
+      Effect   = "Allow"
+      Action   = "lightsail:GetInstance"
+      Resource = "arn:aws:lightsail:eu-west-1:390346501633:*"
+    }, {
       Effect = "Allow"
       Action = [
-        "lightsail:GetInstance",
         "lightsail:OpenInstancePublicPorts",
         "lightsail:CloseInstancePublicPorts"
       ]
