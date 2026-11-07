@@ -25,6 +25,7 @@ from prediction_markets.application.markets.arbitrage_candidates import (
     ListArbitrageCandidates,
 )
 from prediction_markets.application.pnl import PnlService
+from prediction_markets.api.trading.runner import limitless_enabled
 from prediction_markets.application.venue_health import VenueHealthService
 from prediction_markets.infrastructure.agg.arbitrage_stream import (
     AggArbitrageStreamAdapter,
@@ -82,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     venue_health_service = VenueHealthService(
         {
             POLYMARKET_VENUE_ID: PolymarketHealthAdapter(),
-            LIMITLESS_VENUE_ID: LimitlessHealthAdapter(),
+            **({LIMITLESS_VENUE_ID: LimitlessHealthAdapter()} if limitless_enabled() else {}),
             PREDICT_VENUE_ID: PredictHealthAdapter(),
         }
     )

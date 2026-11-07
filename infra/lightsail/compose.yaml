@@ -1,0 +1,79 @@
+name: prediction-bot
+
+x-app: &app
+  env_file: .env
+  environment: &environment
+    POSTGRES_DSN: postgresql://prediction_markets:${POSTGRES_PASSWORD}@postgres:5432/prediction_markets
+    DATABASE_URL: postgresql://prediction_markets:${POSTGRES_PASSWORD}@postgres:5432/prediction_markets
+    JOURNAL_PATH: /app/data/trading.log
+    JOURNAL_SNAPSHOT_DIR: /app/data/trading.log.snapshots
+    MARKET_DATA_ENFORCE_SOURCE_AGE: "true"
+  restart: unless-stopped
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  api:
+    <<: *app
+    image: ${API_IMAGE:-prediction-api:lightsail-20261106}
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  trading:
+    <<: *app
+    image: ${TRADING_IMAGE:-prediction-trading:lightsail-20261106}
+    command: [/app/.venv/bin/uvicorn, prediction_markets.api.trading_main:app, --host, 0.0.0.0, --port, "8001"]
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - journal-data:/app/data
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-prediction-frontend:lightsail-20261106}
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on: [api, trading]
+    restart: unless-stopped
+    logging: *logging
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: prediction_markets
+      POSTGRES_USER: prediction_markets
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a database password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U prediction_markets -d prediction_markets"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *logging
+
+  prometheus:
+    image: prom/prometheus:v3.12.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=1GB
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  journal-data:
+  postgres-data:
+  prometheus-data:

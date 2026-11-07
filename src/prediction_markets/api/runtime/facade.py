@@ -37,7 +37,7 @@ from prediction_markets.api.runtime.safety import (
     _auth_failure,
 )
 from prediction_markets.api.trading.run_manager import ExecutionRunManager
-from prediction_markets.api.trading.runner import LiveArbitrageConfig, preflight
+from prediction_markets.api.trading.runner import LiveArbitrageConfig, limitless_enabled, preflight
 from prediction_markets.application.engine import TradingEngine
 from prediction_markets.application.freshness import source_age_guard_enabled
 from prediction_markets.application.markets.matching import MarketMatcher
@@ -283,6 +283,10 @@ class ArbitrageRuntime:
                 LIMITLESS_VENUE_ID: LimitlessMarketDataStreamAdapter(),
                 PREDICT_VENUE_ID: PredictMarketDataStreamAdapter(),
             }
+            if not limitless_enabled():
+                discovery.pop(LIMITLESS_VENUE_ID)
+                fees.pop(LIMITLESS_VENUE_ID)
+                streams.pop(LIMITLESS_VENUE_ID)
             # AGG outcome identifiers refer to mainnet; testnet stays in the explorer.
             if hyperliquid_enabled() and HyperliquidSettings.from_env().network == "mainnet":
                 hyperliquid_catalog = HyperliquidMarketCatalog()
@@ -419,6 +423,8 @@ class ArbitrageRuntime:
 
     def _start_limitless_redemption(self) -> None:
         """Start the process-local automatic Limitless redemption loop."""
+        if not limitless_enabled():
+            return
         if self._inventory is None:
             raise RuntimeError("Arbitrage runtime is not initialized")
         if self._limitless_redeem_task is not None:
@@ -900,11 +906,6 @@ class ArbitrageRuntime:
                 PolymarketExecutionAdapter,
                 signature_type=int(os.getenv("POLYMARKET_SIGNATURE_TYPE", "3")),
             )
-            limitless_execution = await asyncio.to_thread(
-                LimitlessExecutionAdapter,
-                api_key=os.getenv("LIMITLESS_API_KEY"),
-                api_secret=os.getenv("LIMITLESS_API_SECRET"),
-            )
             predict_execution = await asyncio.to_thread(PredictExecutionAdapter)
             try:
                 await asyncio.to_thread(
@@ -915,16 +916,12 @@ class ArbitrageRuntime:
                 await asyncio.to_thread(predict_execution.close)
                 raise
             polymarket_updates = PolymarketOrderUpdateAdapter()
-            limitless_updates = LimitlessOrderUpdateAdapter(
-                api_key=os.getenv("LIMITLESS_API_KEY"),
-            )
             predict_updates = PredictOrderUpdateAdapter(
                 predict_execution.auth_token,
                 api_key=os.getenv("PREDICT_API_KEY"),
             )
             self._market_data.update({
                 POLYMARKET_VENUE_ID: PolymarketMarketDataAdapter(),
-                LIMITLESS_VENUE_ID: LimitlessMarketDataAdapter(),
                 PREDICT_VENUE_ID: PredictMarketDataAdapter(),
             })
             assert self._stack is not None
@@ -932,21 +929,32 @@ class ArbitrageRuntime:
                 self._stack.push_async_callback(market_data.close)
             self._execution.update({
                 POLYMARKET_VENUE_ID: polymarket_execution,
-                LIMITLESS_VENUE_ID: limitless_execution,
                 PREDICT_VENUE_ID: predict_execution,
             })
             self._updates.update({
                 POLYMARKET_VENUE_ID: polymarket_updates,
-                LIMITLESS_VENUE_ID: limitless_updates,
                 PREDICT_VENUE_ID: predict_updates,
             })
             self._execution_resources.extend([
                 polymarket_updates,
-                limitless_updates,
                 predict_updates,
-                limitless_execution,
                 predict_execution,
             ])
+            if limitless_enabled():
+                limitless_execution = await asyncio.to_thread(
+                    LimitlessExecutionAdapter,
+                    api_key=os.getenv("LIMITLESS_API_KEY"),
+                    api_secret=os.getenv("LIMITLESS_API_SECRET"),
+                )
+                limitless_updates = LimitlessOrderUpdateAdapter(
+                    api_key=os.getenv("LIMITLESS_API_KEY"),
+                )
+                limitless_market_data = LimitlessMarketDataAdapter()
+                self._market_data[LIMITLESS_VENUE_ID] = limitless_market_data
+                self._stack.push_async_callback(limitless_market_data.close)
+                self._execution[LIMITLESS_VENUE_ID] = limitless_execution
+                self._updates[LIMITLESS_VENUE_ID] = limitless_updates
+                self._execution_resources.extend([limitless_updates, limitless_execution])
             self._start_predict_auth_refresh(predict_execution)
             self.pipeline.output_dispatcher.configure(
                 self._execution,

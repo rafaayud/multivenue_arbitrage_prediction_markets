@@ -1,0 +1,88 @@
+name: Deploy Lightsail
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Update containers (requires paused trading); otherwise verify access only
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lightsail-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: lightsail
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-west-1
+      INSTANCE: prediction-bot-ie-2gb
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deployment safeguards
+        run: bash infra/lightsail/test-deploy.sh
+      - name: Build on GitHub, not on the 2 GB server
+        if: inputs.deploy
+        run: |
+          docker build -t prediction-backend:"$GITHUB_SHA" .
+          docker build -t prediction-frontend:"$GITHUB_SHA" frontend
+          docker save prediction-backend:"$GITHUB_SHA" prediction-frontend:"$GITHUB_SHA" | gzip -1 > images.tar.gz
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.LIGHTSAIL_ROLE_ARN }}
+          aws-region: eu-west-1
+      - name: Configure verified SSH access
+        env:
+          SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
+        run: |
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/*
+          host=$(aws lightsail get-instance --instance-name "$INSTANCE" --query instance.publicIpAddress --output text)
+          printf 'Host bot\n  HostName %s\n  User ubuntu\n  BatchMode yes\n  StrictHostKeyChecking yes\n  ConnectTimeout 15\n' "$host" > ~/.ssh/config
+          runner_ip=$(curl --fail --silent --show-error https://checkip.amazonaws.com)
+          python3 -c 'import ipaddress,sys; ipaddress.IPv4Address(sys.argv[1])' "$runner_ip"
+          echo "RUNNER_CIDR=$runner_ip/32" >> "$GITHUB_ENV"
+      - name: Temporarily allow this runner
+        run: |
+          aws lightsail open-instance-public-ports --instance-name "$INSTANCE" --port-info "fromPort=22,toPort=22,protocol=tcp,cidrs=$RUNNER_CIDR" > /dev/null
+          for attempt in $(seq 1 12); do
+            if ssh bot true; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Transfer and deploy without copying venue credentials
+        if: inputs.deploy
+        run: |
+          ssh bot "mkdir -p /home/ubuntu/prediction-bot/releases/$GITHUB_SHA"
+          scp images.tar.gz infra/lightsail/compose.yaml infra/lightsail/deploy.sh bot:/home/ubuntu/prediction-bot/releases/"$GITHUB_SHA"/
+          ssh bot "bash /home/ubuntu/prediction-bot/releases/$GITHUB_SHA/deploy.sh $GITHUB_SHA"
+      - name: Verify application access without restarting trading
+        if: ${{ !inputs.deploy }}
+        run: |
+          ssh bot 'curl -fsS http://127.0.0.1:8000/health && curl -fsS http://127.0.0.1:8001/health && curl -fsS -o /dev/null http://127.0.0.1:8080/'
+      - name: Remove temporary firewall access
+        if: always() && env.RUNNER_CIDR != ''
+        run: |
+          aws lightsail close-instance-public-ports --instance-name "$INSTANCE" --port-info "fromPort=22,toPort=22,protocol=tcp,cidrs=$RUNNER_CIDR" > /dev/null
+      - name: Remove runner SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config

@@ -15,7 +15,7 @@ from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
-from prediction_markets.api.trading.runner import LiveArbitrageConfig
+from prediction_markets.api.trading.runner import LiveArbitrageConfig, limitless_enabled
 from prediction_markets.application.engine import TradingEngine
 from prediction_markets.application.events import (
     InventoryOperationRecorded,
@@ -95,13 +95,14 @@ def _build_short_inventory_adapters(
     adapters: dict[VenueID, OutcomeInventoryPort] = {}
     try:
         adapters[POLYMARKET_VENUE_ID] = PolymarketOutcomeInventoryAdapter()
-        adapters[LIMITLESS_VENUE_ID] = (
-            limitless_adapter
-            or LimitlessOutcomeInventoryAdapter(
-                api_key=os.getenv("LIMITLESS_API_KEY"),
-                api_secret=os.getenv("LIMITLESS_API_SECRET"),
+        if limitless_enabled():
+            adapters[LIMITLESS_VENUE_ID] = (
+                limitless_adapter
+                or LimitlessOutcomeInventoryAdapter(
+                    api_key=os.getenv("LIMITLESS_API_KEY"),
+                    api_secret=os.getenv("LIMITLESS_API_SECRET"),
+                )
             )
-        )
         adapters[PREDICT_VENUE_ID] = PredictOutcomeInventoryAdapter()
     except BaseException:
         for adapter in adapters.values():

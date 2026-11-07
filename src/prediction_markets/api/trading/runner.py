@@ -118,6 +118,11 @@ def database_url() -> str:
     return value
 
 
+def limitless_enabled() -> bool:
+    """Return whether this deployment permits Limitless adapters and trading."""
+    return os.getenv("LIMITLESS_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
+
+
 def preflight() -> dict[str, object]:
     """Check credentials, PostgreSQL, and unresolved projected executions."""
     required = (
@@ -132,7 +137,11 @@ def preflight() -> dict[str, object]:
         "PREDICT_ACCOUNT_ADDRESS",
         "PREDICT_PRIVY_PRIVATE_KEY",
     )
-    missing = [name for name in required if not os.getenv(name)]
+    missing = [
+        name for name in required
+        if (limitless_enabled() or not name.startswith("LIMITLESS_"))
+        and not os.getenv(name)
+    ]
     active_journals = unresolved_recoveries = None
     database_ready = False
     try:

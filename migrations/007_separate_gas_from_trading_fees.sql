@@ -28,6 +28,7 @@ SET gas_usd = GREATEST(
     0
 )
 WHERE point.source = 'bot_ledger'
+  AND point.gas_usd IS NULL
   AND point.fees_usd IS NOT NULL;
 
 COMMIT;
