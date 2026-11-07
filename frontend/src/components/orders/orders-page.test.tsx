@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, test, vi } from "vitest"
+import { beforeEach, describe, expect, test, vi } from "vitest"
 
 import { OrdersPage } from "@/components/orders/orders-page"
+import { usePnl } from "@/features/pnl/use-pnl"
 import type { ExecutionActivitySnapshot } from "@/types/execution"
 
 const snapshot: ExecutionActivitySnapshot = {
@@ -33,6 +34,7 @@ const snapshot: ExecutionActivitySnapshot = {
       executionId: "execution-1",
       monitorType: "cycle",
       monitorKey: "cycle:BTC:3600",
+      marketLabel: null,
       underlying: "BTC",
       intervalSeconds: 3600,
       status: "recovered",
@@ -139,6 +141,20 @@ snapshot.journals.push({
 
 const completeExecution = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 
+const pnlState = {
+  pnl: null as { terminal_executions: { net_pnl_usd: string; fees_usd: string; gas_usd: string | null } } | null,
+  error: null as string | null,
+}
+
+vi.mock("@/features/pnl/use-pnl", () => ({
+  usePnl: vi.fn(() => pnlState),
+}))
+
+beforeEach(() => {
+  pnlState.pnl = { terminal_executions: { net_pnl_usd: "-0.05786", fees_usd: "0.00786", gas_usd: "0.0042" } }
+  pnlState.error = null
+})
+
 vi.mock("@/lib/api-client", () => ({
   apiClient: { completeExecution },
 }))
@@ -153,11 +169,73 @@ vi.mock("@/features/execution/execution-activity-provider", () => ({
   }),
 }))
 
+const runtimeState = {
+  runtime: {
+    regular_markets: [] as Array<{ monitor_key: string; markets: Array<{ title: string }> }>,
+  },
+}
+
 vi.mock("@/features/runtime/use-runtime", () => ({
-  useRuntime: () => ({ runtime: { regular_markets: [] } }),
+  useRuntime: () => runtimeState,
 }))
 
 describe("OrdersPage", () => {
+  test("keeps the recorded market name after monitoring stops and the page reloads", () => {
+    const original = snapshot.journals[0]!
+    const label = "Will the regular event happen?"
+    snapshot.journals[0] = {
+      ...original,
+      monitorType: "regular",
+      monitorKey: "regular:event",
+      marketLabel: label,
+      underlying: null,
+      intervalSeconds: null,
+    }
+    runtimeState.runtime.regular_markets = [
+      { monitor_key: "regular:event", markets: [{ title: "Current catalog title" }] },
+    ]
+    try {
+      const view = render(<OrdersPage />)
+      expect(screen.getByText(label)).toHaveAttribute("title", label)
+
+      runtimeState.runtime.regular_markets = []
+      view.rerender(<OrdersPage />)
+      expect(screen.getByText(label)).toBeInTheDocument()
+
+      view.unmount()
+      render(<OrdersPage />)
+      expect(screen.getByText(label)).toBeInTheDocument()
+    } finally {
+      snapshot.journals[0] = original
+      runtimeState.runtime.regular_markets = []
+    }
+  })
+
+  test("uses all-time PnL totals instead of summing the limited activity feed", () => {
+    pnlState.pnl!.terminal_executions = {
+      net_pnl_usd: "3.258711242961635625", fees_usd: "2.986055744664911056", gas_usd: "0.1736243193732856",
+    }
+    render(<OrdersPage />)
+
+    expect(usePnl).toHaveBeenLastCalledWith("bot_ledger", "ALL")
+    const card = (label: string) => within(screen.getByText(label).parentElement!)
+    expect(card("Closed execution net PnL").getByText("+$3.2587")).toBeInTheDocument()
+    expect(card("Trading fees").getByText("$2.9861")).toBeInTheDocument()
+    expect(card("Gas (inventory ops)").getByText("$0.1736")).toBeInTheDocument()
+    expect(screen.getByText(/subtract recorded gas to match the PnL tab/)).toBeInTheDocument()
+  })
+
+  test("keeps all-time totals unavailable instead of falling back to recent activity", () => {
+    pnlState.pnl = null
+    pnlState.error = "Unavailable"
+    render(<OrdersPage />)
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Unavailable")
+    for (const label of ["Closed execution net PnL", "Trading fees", "Gas (inventory ops)"]) {
+      expect(within(screen.getByText(label).parentElement!).getByText("—")).toBeInTheDocument()
+    }
+  })
+
   test("explains a recovered execution beside its original legs", () => {
     render(<OrdersPage />)
 

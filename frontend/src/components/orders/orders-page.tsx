@@ -42,6 +42,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useExecutionActivity } from "@/features/execution/execution-activity-provider"
+import { usePnl } from "@/features/pnl/use-pnl"
 import { useRuntime } from "@/features/runtime/use-runtime"
 import { apiClient } from "@/lib/api-client"
 import {
@@ -524,20 +525,13 @@ function EmptyRow({
 /** Present persisted execution attempts, orders, aggregate fills and recoveries. */
 export function OrdersPage() {
   const { snapshot } = useExecutionActivity()
+  const { pnl, error: pnlError } = usePnl("bot_ledger", "ALL")
   const { runtime } = useRuntime()
+  const totals = pnl?.terminal_executions
   const orders = snapshot?.orders ?? []
   const trades = snapshot?.trades ?? []
   const journals = snapshot?.journals ?? []
   const recoveries = snapshot?.recoveries ?? []
-  const terminalJournals = journals.filter(
-    (journal) =>
-      ["completed", "recovered"].includes(journal.status) &&
-      journal.netLockedPnlUsd !== null,
-  )
-  const terminalNet = terminalJournals.reduce(
-    (total, journal) => total + (journal.netLockedPnlUsd ?? 0),
-    0,
-  )
   const regularMarkets = new Map(
     (runtime?.regular_markets ?? []).map((market) => [
       market.monitor_key,
@@ -556,22 +550,23 @@ export function OrdersPage() {
       />
 
       <ExecutionFeedStatus />
+      {pnlError && <p role="alert" className="mb-4 text-sm text-destructive">PnL totals could not be refreshed: {pnlError}</p>}
 
       <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
         {[
           {
             label: "Closed execution net PnL",
-            value: terminalJournals.length ? signedUsd(terminalNet) : "—",
+            value: totals ? signedUsd(Number(totals.net_pnl_usd)) : "—",
             icon: ReceiptText,
           },
           {
             label: "Trading fees",
-            value: snapshot ? `$${formatPrice(snapshot.tradingFeesUsd)}` : "—",
+            value: totals ? `$${formatPrice(Number(totals.fees_usd))}` : "—",
             icon: ReceiptText,
           },
           {
             label: "Gas (inventory ops)",
-            value: snapshot ? `$${formatPrice(snapshot.gasUsd)}` : "—",
+            value: totals?.gas_usd != null ? `$${formatPrice(Number(totals.gas_usd))}` : "—",
             icon: Fuel,
           },
           { label: "Execution attempts", value: journals.length, icon: Activity },
@@ -590,6 +585,9 @@ export function OrdersPage() {
           </Card>
         ))}
       </section>
+      <p className="mb-4 text-xs text-muted-foreground">
+        PnL and costs cover all time. Trading fees are already deducted from the execution net; subtract recorded gas to match the PnL tab. Activity counts and tables show recent records.
+      </p>
 
       <Card className="mb-4">
         <CardHeader className="flex-row items-start justify-between">
@@ -624,6 +622,8 @@ export function OrdersPage() {
                 />
               ) : (
                 journals.map((journal) => {
+                  const marketLabel =
+                    journal.marketLabel ?? regularMarkets.get(journal.monitorKey ?? "")
                   const capital = deployedCapital(journal)
                   const returnRate =
                     capital === null || journal.netLockedPnlUsd === null
@@ -646,10 +646,7 @@ export function OrdersPage() {
                     <TableCell className="w-56 max-w-56 whitespace-normal text-xs">
                       <div
                         className="line-clamp-3 break-words"
-                        title={
-                          regularMarkets.get(journal.monitorKey ?? "") ??
-                          undefined
-                        }
+                        title={marketLabel}
                       >
                         {journal.monitorType === "cycle" && journal.underlying &&
                         journal.intervalSeconds ? (
@@ -662,7 +659,7 @@ export function OrdersPage() {
                             </span>
                           </>
                         ) : (
-                          regularMarkets.get(journal.monitorKey ?? "") ?? "—"
+                          marketLabel ?? "—"
                         )}
                       </div>
                     </TableCell>

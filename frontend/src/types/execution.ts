@@ -84,6 +84,7 @@ export interface ExecutionJournal {
   executionId: string
   monitorType: "cycle" | "regular" | null
   monitorKey: string | null
+  marketLabel: string | null
   underlying: string | null
   intervalSeconds: number | null
   status: string
@@ -461,6 +462,7 @@ function parseJournal(value: unknown): ExecutionJournal {
         ? item.monitor_type
         : null,
     monitorKey: nullableString(item.monitor_key, "journal.monitor_key"),
+    marketLabel: nullableString(item.market_label, "journal.market_label"),
     underlying: nullableString(item.underlying, "journal.underlying"),
     intervalSeconds:
       item.interval_seconds == null

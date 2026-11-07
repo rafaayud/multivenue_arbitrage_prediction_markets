@@ -428,9 +428,12 @@ class ManualExecutionResolutionOut(BaseModel):
 
 
 class ExecutionJournalOut(BaseModel):
+    """Expose durable execution details and the originating market label."""
+
     execution_id: str
     monitor_type: Literal["cycle", "regular"] | None = None
     monitor_key: str | None = None
+    market_label: str | None = None
     underlying: str | None = None
     interval_seconds: int | None = None
     status: str

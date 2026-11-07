@@ -12,6 +12,7 @@ from prediction_markets.application.events import (
     ArbitrageOpportunityFound,
     ExecutionUpdated,
     MarketMatchesUpdated,
+    PreparedExecutionBatch,
     TradeRecorded,
 )
 from prediction_markets.application.markets.models import MarketCycle
@@ -382,6 +383,15 @@ def test_regular_candidate_projects_without_cycle_metadata() -> None:
     assert json.loads(cursor.executions[0][1][-1])["market_label"] == "Regular market"
     assert "INSERT INTO arbitrage_opportunities" in cursor.executions[1][0]
     assert cursor.executions[1][1][:3] == ("regular-opportunity", 8, "regular")
+
+    batch = PreparedExecutionBatch(
+        opportunity=detected,
+        planned=SimpleNamespace(execution=SimpleNamespace(id=detected.id)),
+        commands=(),
+        prepared=(),
+        deadline_wall_at_ns=0,
+    )
+    assert _summary(batch)["market_label"] == "Regular market"
 
 
 def test_match_projection_retains_binary_contract_complements() -> None:

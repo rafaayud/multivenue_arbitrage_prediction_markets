@@ -1417,6 +1417,7 @@ def _summary(event: object) -> dict[str, object]:
     if isinstance(event, PreparedExecutionBatch):
         return {
             "execution_id": event.planned.execution.id,
+            "market_label": _summary(event.opportunity)["market_label"],
             "prepared_legs": len(event.prepared),
             "rejection_reason": event.rejection_reason,
         }

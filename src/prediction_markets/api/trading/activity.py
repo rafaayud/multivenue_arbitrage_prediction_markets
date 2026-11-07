@@ -825,8 +825,8 @@ def _recovery_out(recovery: ExposureRecovery) -> ExposureRecoveryOut:
 def _journal_markets(
     connection: psycopg.Connection,
     journals: tuple[ArbitrageExecutionJournal, ...],
-) -> dict[str, tuple[str, str, str | None, int | None]]:
-    """Load projected market identities for execution journals in one query.
+) -> dict[str, tuple[str, str, str | None, int | None, str | None]]:
+    """Load durable market identities and labels for execution journals.
 
     Parameters
     ----------
@@ -837,22 +837,23 @@ def _journal_markets(
 
     Returns
     -------
-    dict[str, tuple[str, str, str | None, int | None]]
-        Market type, stable key, optional underlying, and optional interval by
-        execution identifier.
+    dict[str, tuple[str, str, str | None, int | None, str | None]]
+        Market type, stable key, optional underlying, interval, and recorded
+        label by execution identifier, independent of active monitoring.
     """
     if not journals:
         return {}
     rows = connection.execute(
         """
         SELECT opportunity_id, monitor_type, monitor_key,
-               underlying, interval_seconds
-        FROM arbitrage_opportunities
+               underlying, interval_seconds, e.summary ->> 'market_label'
+        FROM arbitrage_opportunities o
+        LEFT JOIN projected_events e USING (journal_sequence)
         WHERE opportunity_id = ANY(%s)
         """,
         ([journal.id for journal in journals],),
     ).fetchall()
-    return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
+    return {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in rows}
 
 
 def _journal_latency_traces(
@@ -889,7 +890,7 @@ def _journal_latency_traces(
 
 def _journal_out(
     journal: ArbitrageExecutionJournal,
-    market: tuple[str, str, str | None, int | None] | None = None,
+    market: tuple[str, str, str | None, int | None, str | None] | None = None,
     trades: tuple[Trade, ...] = (),
     latency_trace: dict[str, object] | None = None,
     recovery: ExposureRecovery | None = None,
@@ -901,7 +902,7 @@ def _journal_out(
     journal
         Durable two-leg execution state.
     market
-        Optional projected monitor identity associated with the execution.
+        Optional projected monitor identity and recorded market label.
     trades
         Actual normalized fills and fees available for the journal legs.
     latency_trace
@@ -941,6 +942,7 @@ def _journal_out(
         execution_id=journal.id,
         monitor_type=market[0] if market else None,
         monitor_key=market[1] if market else None,
+        market_label=market[4] if market else None,
         underlying=market[2] if market else None,
         interval_seconds=market[3] if market else None,
         status=journal.status.value,

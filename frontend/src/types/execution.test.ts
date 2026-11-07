@@ -5,7 +5,7 @@ import { parseExecutionActivity } from "@/types/execution"
 const timestamp = "2026-07-29T18:30:00Z"
 
 describe("parseExecutionActivity", () => {
-  test("normalizes persisted orders, fills, positions and recovery state", () => {
+  test.each(["Bitcoin", null, undefined])("normalizes persisted activity with market label %s", (marketLabel) => {
     const snapshot = parseExecutionActivity({
       type: "execution_activity_snapshot",
       generated_at: timestamp,
@@ -62,6 +62,7 @@ describe("parseExecutionActivity", () => {
           execution_id: "execution-1",
           monitor_type: "cycle",
           monitor_key: "cycle:BTC:300",
+          market_label: marketLabel,
           underlying: "BTC",
           interval_seconds: 300,
           status: "completed",
@@ -212,6 +213,7 @@ describe("parseExecutionActivity", () => {
     expect(snapshot.positions[0]?.averageEntryPrice).toBe(0.39)
     expect(snapshot.journals[0]?.leg2.venueId).toBe("LIMITLESS")
     expect(snapshot.journals[0]?.monitorKey).toBe("cycle:BTC:300")
+    expect(snapshot.journals[0]?.marketLabel).toBe(marketLabel ?? null)
     expect(snapshot.journals[0]?.netLockedPnlUsd).toBe(0.29)
     expect(snapshot.journals[0]?.manualResolution?.method).toBe("settlement")
     expect(snapshot.journals[0]?.manualResolution?.price).toBe(1)

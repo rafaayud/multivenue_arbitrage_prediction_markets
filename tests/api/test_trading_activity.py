@@ -37,6 +37,7 @@ from prediction_markets.infrastructure.postgres.inventory_costs import Inventory
 from prediction_markets.api.trading.activity import (
     TradingActivityReader,
     _internal_pnl_out,
+    _journal_markets,
     _journal_out,
     _recovery_out,
 )
@@ -79,6 +80,19 @@ from prediction_markets.domain.trading.entities import ArbitrageExecutionJournal
 
 
 _NOW = datetime(2026, 7, 29, 18, 30, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("label", ["Will the regular event happen?", None])
+def test_execution_market_metadata_reads_durable_labels(label):
+    """Read recorded labels and tolerate legacy events without a title."""
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [
+        ("execution-1", "regular", "regular:event", None, None, label),
+    ]
+
+    markets = _journal_markets(connection, (SimpleNamespace(id="execution-1"),))
+
+    assert markets["execution-1"] == ("regular", "regular:event", None, None, label)
 
 
 @pytest.mark.parametrize("label", ["Will the regular event happen?", None])
@@ -821,8 +835,14 @@ def test_completed_execution_reports_actual_fees_and_locked_pnl(
     )
 
     latency_trace = {"execution_id": journal.id, "outcome": "terminal"}
-    result = _journal_out(journal, trades=trades, latency_trace=latency_trace)
+    result = _journal_out(
+        journal,
+        market=("regular", "regular:event", None, None, "Historical market"),
+        trades=trades,
+        latency_trace=latency_trace,
+    )
 
+    assert result.market_label == "Historical market"
     assert result.leg1.fee_amount == Decimal("0.05926")
     assert result.leg2.fee_amount == Decimal("0.06")
     assert result.gross_locked_pnl_usd == Decimal("0.12")
